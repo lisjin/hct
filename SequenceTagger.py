@@ -151,8 +151,8 @@ class BertForSequenceTagging(BertPreTrainedModel):
 		#sequence_output = self.dropout(sequence_output)
 
 		#print("sequence_output", sequence_output.shape)
-		#if gpt_model == None:
-		#	self._rl_ratio = 0.0
+		if gpt_model == None:
+			self._rl_ratio = 0.0
 		logits = self.classifier(sequence_output) #[bs, seq, 2]
 
 		start_dist, end_dist = self.span_classifier(sequence_output, attention_mask.float())
