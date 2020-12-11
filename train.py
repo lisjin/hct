@@ -111,7 +111,7 @@ def train_and_evaluate(model, gpt_model, train_data, val_data, test_data, optimi
 
         #out of domain test data evaluation
         params.eval_steps = params.test_steps
-        test_metrics = evaluate(model, gpt_model, test_data_iterator, params, epoch, mark='Test')
+        #test_metrics = evaluate(model, gpt_model, test_data_iterator, params, epoch, mark='Test')
 
         # Early stopping and logging best f1
         if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:

@@ -26,12 +26,6 @@ class DataLoader(object):
 
 
     def load_tags(self):
-        #tags = []
-        #file_path = os.path.join(self.data_dir, 'tags.txt')
-        #with open(file_path, 'r') as file:
-        #    for tag in file:
-        #        tags.append(tag.strip())
-        #return tags
         return ["KEEP", "DELETE"]
 
     def _split_to_wordpieces_span(self, tokens, label_action, label_start, label_end):

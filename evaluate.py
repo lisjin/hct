@@ -72,17 +72,6 @@ def tags_to_string(source, labels):
        output_tokens.append("*")
     elif len(output_tokens) > 1 and output_tokens[-1]=="*":
        output_tokens = output_tokens[:-1]
-    """
-    if len(output_tokens)<2:
-        s = " ".join(source)
-        if "|" in s: 
-            output_tokens = s.split("|")[1].split()
-        else:
-            output_tokens = s.split()
-    if len(output_tokens) > 1 and output_tokens[-1]=="*":
-        output_tokens = output_tokens[:-1]
-    """
-    #return ' '.join(output_tokens).strip()
     return convert_tokens_to_string(output_tokens)
 
 def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbose=False):
@@ -150,13 +139,10 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
         true_action_tags, true_start_tags, true_end_tags)
     source = []
     tokenizer = BertTokenizer.from_pretrained("bert-base-chinese", do_lower_case=False)
-    #tokenizer = BertTokenizer.from_pretrained("bert-base-cased", do_lower_case=False)
 
     for i in range(len(source_tokens)):
         source.append(tokenizer.convert_ids_to_tokens(source_tokens[i].tolist()))
-        #print("converted back source:", tokenizer.convert_ids_to_tokens(source_tokens[i].tolist()))
     
-    #print("source:", source)
     hypo = []
     for i in range(len(pred_tags)):
         #print("source:", source[i])
@@ -294,7 +280,7 @@ if __name__ == '__main__':
 
     # Specify the test set size
     params.test_size = test_data['size']
-    params.eval_steps = math.ceil(params.test_size // params.batch_size)
+    params.eval_steps = math.ceil(params.test_size / params.batch_size)
     test_data_iterator = data_loader.data_iterator(test_data, shuffle=False)
 
     params.tagger_model_dir = tagger_model_dir
