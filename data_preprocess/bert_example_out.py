@@ -8,7 +8,6 @@ import collections
 from bert import tokenization
 import tagging
 import tagging_converter
-import tensorflow as tf
 from typing import Mapping, MutableSequence, Optional, Sequence, Text
 import utils 
 
@@ -112,7 +111,7 @@ class BertExampleBuilder(object):
     else:
       # If target is not provided, we set all target labels to KEEP.
       tags = [tagging.Tag('KEEP') for _ in task.source_tokens]
-    #print("input tokens:", task.source_tokens)
+
     label_action = []
     start = []
     end = []
@@ -166,66 +165,6 @@ class BertExampleBuilder(object):
         default_label=self._keep_tag_id)
     #example.pad_to_max_length(self._max_seq_length, self._pad_id)
     return example
-
-  def _split_to_wordpieces(self, tokens, labels):
-    """Splits tokens (and the labels accordingly) to WordPieces.
-
-    Args:
-      tokens: Tokens to be split.
-      labels: Labels (one per token) to be split.
-
-    Returns:
-      3-tuple with the split tokens, split labels, and the indices of the
-      WordPieces that start a token.
-    """
-    bert_tokens = []  # Original tokens split into wordpieces.
-    bert_labels = []  # Label for each wordpiece.
-    # Index of each wordpiece that starts a new token.
-    token_start_indices = []
-    for i, token in enumerate(tokens):
-      # '+ 1' is because bert_tokens will be prepended by [CLS] token later.
-      token_start_indices.append(len(bert_tokens) + 1)
-      pieces = self._tokenizer.tokenize(token)
-      bert_tokens.extend(pieces)
-      bert_labels.extend([labels[i]] * len(pieces))
-    return bert_tokens, bert_labels, token_start_indices
-
-  def _split_to_wordpieces_span(self, tokens, labels, tags, label_action, label_start, label_end):
-    bert_tokens = []
-    bert_labels = []
-    bert_ori_labels = []
-
-    bert_label_action = []
-    bert_label_start = []
-    bert_label_end = []
-    token_start_indices = []
-    start = []
-    end = []
-    for i, token in enumerate(tokens):
-      token_start_indices.append(len(bert_tokens) + 1)
-      if token == "[SEP]":
-         pieces = ['[SEP]']
-      elif token == "[CI]":
-         pieces = ['<S>']
-      elif token == "<T>":
-         pieces = ['<T>']
-      else:
-         pieces = self._tokenizer.tokenize(token)
-      bert_tokens.extend(pieces)
-      bert_labels.extend([labels[i]] * len(pieces))
-      bert_ori_labels.extend([tags[i]] * len(pieces))
-      bert_label_action.extend([label_action[i]] * len(pieces))
-      start.extend([label_start[i]] * len(pieces))
-      end.extend([label_end[i]] * len(pieces))
-    bert_label_start = start
-    bert_label_end = end
-    return bert_tokens, bert_labels, bert_label_action, bert_label_start, bert_label_end, token_start_indices
-
-
-  def _truncate_list(self, x):
-    """Returns truncated version of x according to the self._max_seq_length."""
-    # Save two slots for the first [CLS] token and the last [SEP] token.
-    return x[:self._max_seq_length - 2]
 
   def _get_pad_id(self):
     """Returns the ID of the [PAD] token (or 0 if it's not in the vocab)."""
