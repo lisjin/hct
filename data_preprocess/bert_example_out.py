@@ -9,7 +9,7 @@ from bert import tokenization
 import tagging
 import tagging_converter
 from typing import Mapping, MutableSequence, Optional, Sequence, Text
-import utils 
+import utils_data as utils 
 
 class BertExample(object):
   """Class for training and inference examples for BERT.
