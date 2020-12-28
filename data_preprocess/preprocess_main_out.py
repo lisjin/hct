@@ -79,8 +79,8 @@ def main(argv):
                                             FLAGS.do_lower_case, converter)
 
   num_converted = 0
-  file_tag = open("tags.txt", "w")
-  file_sen = open("sentences.txt", "w")
+  file_tag = open("data_out/tags.txt", "w")
+  file_sen = open("data_out/sentences.txt", "w")
   for i, (sources, target) in enumerate(utils.yield_sources_and_targets(
       FLAGS.input_file, FLAGS.input_format)):
     logging.log_every_n(

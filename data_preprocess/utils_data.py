@@ -108,8 +108,6 @@ def _yield_wikisplit_examples(
     for line in f:
       line = line.replace('"', '')
       source, target = line.rstrip('\n').split('\t')
-      #extra_stop_words = ["的", "是", "我", "了", "和"]
-      #source = " ".join(extra_stop_words)+" "+source 
       yield [source], target
 
 
