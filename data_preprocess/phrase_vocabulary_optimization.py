@@ -10,7 +10,7 @@ from absl import app
 from absl import flags
 from absl import logging
 
-import utils
+import utils_data as utils
 
 import numpy as np
 import scipy.sparse

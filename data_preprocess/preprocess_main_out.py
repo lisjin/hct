@@ -10,7 +10,7 @@ from absl import flags
 from absl import logging
 import bert_example_out as bert_example
 import tagging_converter
-import utils
+import utils_data as utils
 
 import tensorflow as tf
 
