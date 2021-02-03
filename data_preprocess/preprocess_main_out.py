@@ -96,8 +96,8 @@ def main(argv):
     file_sen.write(" ".join(example.features["input_tokens"]).replace("[CI]", "|")+"\n")
     num_converted += 1
   logging.info(f'Done. {num_converted} examples converted to tf.Example.')
-  count_fname = _write_example_count(num_converted)
-  logging.info(f'Wrote:\n{FLAGS.output_tfrecord}\n{count_fname}')
+  #count_fname = _write_example_count(num_converted)
+  #logging.info(f'Wrote:\n{FLAGS.output_tfrecord}\n{count_fname}')
   file_tag.close()
   file_sen.close()
 
