@@ -4,6 +4,8 @@ import json
 
 from allennlp_models import pretrained
 from collections import Counter
+from nltk import Tree
+from tqdm import tqdm
 
 PREP = ['besides', 'aside from', 'in addition to', 'other than', 'along with',
     'in regards to', 'regarding']
@@ -19,7 +21,7 @@ def prepos_freq(unmatch_path):
     with open(unmatch_path, 'r', encoding='utf8') as f:
         for i, line in enumerate(f.readlines()):
             c = i % 4
-            if c == 0 or c == 3:
+            if c == 0:
                 continue
             elif c == 1:  # unmatched phrase
                 s = line.rstrip()[17:]
@@ -29,9 +31,10 @@ def prepos_freq(unmatch_path):
                         prep_cnt[p] += 1
                         break
             elif c == 2:  # context
-                s = line.rstrip()[8:].split('[ci]')[0]
-                cur.append(s)
-                assert(len(cur) == 2)
+                cur.append(line.rstrip()[8:].split('[ci]')[0])
+            elif c == 3:  # target
+                cur.append(line.rstrip()[8:])
+                assert(len(cur) == 3)
                 outs.append(cur[:])
                 cur.clear()
 
@@ -57,25 +60,50 @@ def lemmatize(outs):
             json.dump(lems, f)
 
 
-def cparse(outs, ids_f='pt_ids.txt', pts_f='pts_uniq.txt'):
-    pred = pretrained.load_predictor('structured-prediction-constituency-parser')
-    seen = {}
-    pt_ids = []
-    pts_uniq = []
-    for o in outs:
-        ids = []
-        for s in o[1].split('[sep]'):
-            if s not in seen:
-                pt = pred.predict(s)
-                seen[s] = len(pts_uniq)
-                pts_uniq.append(pt['trees'])
-            ids.append(seen[s])
-    pt_ids.append(','.join(map(str, ids)))
+def write_lst(f_name, lst):
+    with open(f_name, 'w', encoding='utf8') as f:
+        f.writelines(f'{l}\n' for l in lst)
 
-    with open(ids_f, 'w', encoding='utf8') as f:
-        f.writelines(f'{l}\n' for l in pt_ids)
-    with open(pts_f, 'w', encoding='utf8') as f:
-        f.writelines(f'{l}\n' for l in pts_uniq)
+
+def cparse(outs, ids_f='pt_ids.txt', pts_f='pts_uniq.txt', pts_tgt_f='pts_tgt.txt'):
+    pred = pretrained.load_predictor('structured-prediction-constituency-parser')
+
+    def get_pt_id(seen, s):
+        if s not in seen:
+            pt = pred.predict(s)
+            seen[s] = len(pts_uniq)
+            pts_uniq.append(pt['trees'])
+        return seen[s]
+
+    def clean_s(s):
+        return s.rstrip(' *').replace('(', '-LRB-').replace(')', '-RRB-')
+
+    def try_pred(s):
+        pt_str = pred.predict(s)['trees']
+        try:
+            Tree.fromstring(pt_str)
+        except ValueError:
+            pt_str = pred.predict(clean_s(s))['trees']
+        return pt_str
+
+    pt_ids, pts_uniq = [], []
+    seen = {}
+    pts_tgt = []
+    for i in tqdm(range(len(outs))):
+        ids = []
+        for s in outs[i][1].split('[sep]'):
+            if s not in seen:
+                seen[s] = len(pts_uniq)
+                pts_uniq.append(try_pred(s))
+            ids.append(seen[s])
+        pt_ids.append(','.join(map(str, ids)))
+
+        pts_tgt.append(try_pred(outs[i][2]))
+
+    assert(len(pt_ids) == len(pts_tgt))
+    write_lst(ids_f, pt_ids)
+    write_lst(pts_f, pts_uniq)
+    write_lst(pts_tgt_f, pts_tgt)
 
 
 def main(args):
