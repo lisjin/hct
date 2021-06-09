@@ -2,8 +2,10 @@
 import argparse
 import difflib
 import json
+import numpy as np
 import regex
 
+from collections import deque
 from functools import partial
 from nltk import Tree
 from sacrebleu import sentence_chrf
@@ -34,7 +36,7 @@ def regex_match(ctx, phr):
     try:
         # (?b) is BESTMATCH, (?e) is ENHANCEMATCH flag
         # NOTE: n.fuzzy_counts is (sub, ins, del) count
-        m = regex.search(f'(?e){phr}{{e}}', ctx)
+        m = regex.search(f'(?e)(?<!\\S){phr}(?!\\S){{e}}', ctx)
         if m:
             a, n = m.span()
             n -= a
@@ -56,51 +58,111 @@ def get_offset(tgt, phr):
     return offset, phr, pl if offset > -1 else 0
 
 
-def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn):
+def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode):
     phr = rm_prep(phr)
     offset, phr_spl, pl = get_offset(tgt, phr)
     bspans = {}
 
+    def search_span(i, k, phr_spl, ctx):
+        kp = k if i > -1 else k + i
+        a, n = -1, 0
+        if kp > 0:
+            ip = max(0, i)
+            cur_phr = ' '.join(phr_spl[ip:ip+kp])
+            a, n = match_fn(ctx, cur_phr)
+        return a, n
+
     def trav(t, s):
-        """Iterate through tree spans. Return (i, j - i)."""
+        """Compare tree span matches bottom-up, replacing parent score by
+        children's as necessary."""
         a = -1  # start character index in context match
         n = 0  # number of matched characters in context
         i = s - offset  # span token index in phrase
         k = len(t.leaves())  # span token length in phrase
-        if i > -1:
-            cur_phr = ' '.join(phr_spl[i:i+k])
-            a, n = match_fn(ctx, cur_phr)
+        if (i, k) not in bspans:
+            a, n = search_span(i, k, phr_spl, ctx)
             cn = 0
             spans = []
             for st in t:
                 if type(st) is Tree:
                     s, a2, n2, i2, k2 = trav(st, s)
-                    if i > -1:
+                    if i > -1 and n2 > 1:
                         spans.append((i2, k2, a2, n2))
                         cn += n2
                 else:
                     s += 1
-            bspans[(i, k)] = spans if cn > n else [(i, k, a, n)]
-            n = max(cn, n)
+            bspans[(i, k)] = [(i, k, a, n)]
+            if cn > n:
+                bspans[(i, k)][:] = spans[:]
+                n = cn
         return s, a, n, i, k
 
-    _, _, _, i, k = trav(cpt_tgt, offset)
-    m = ''
-    if (i, k) in bspans:
-        m = ' '.join([ctx[a2:a2+n2] for (i2, k2, a2, n2) in bspans[(i, k)] if n2 > 1])
-    return m, phr
+    def bottom_up():
+        _, _, _, i, k = trav(cpt_tgt, offset)
+        m = ' '.join([ctx[a2:a2+n2] for (_, _, a2, n2) in bspans[(i, k)]])
+        return m, (i, k)
+
+    def top_down():
+        """Stop exploring child spans if their summed match count is less than
+        parent's. This helps minimize number of tree splits.
+        """
+        m = ''
+        bsp = (-offset, len(cpt_tgt.leaves()))
+        if offset > -1:
+            def t_score(t, i):
+                k = len(t.leaves())
+                a, n = search_span(i, k, phr_spl, ctx)
+                return a, n, k
+
+            dq = deque([(cpt_tgt, -offset)])
+            while dq:
+                t, i = dq.pop()
+                if type(t) is Tree:
+                    a, n, k = t_score(t, i)
+                    spans, sts = [], []
+                    find_bsp = i <= 0 and k >= pl
+                    i2 = i
+                    cn = 0
+                    for st in t:
+                        if type(st) is Tree:
+                            a2, n2, k2 = t_score(st, i2)
+                            if n2 > 1:
+                                spans.append((i2, k2, a2, n2))
+                                sts.append((st, i2))
+                                cn += n2
+                                if find_bsp and i2 <= 0 and i2 + k2 >= pl:
+                                    bsp = (i2, k2)
+                                    cn = n2
+                                    spans = spans[-1:]
+                                    sts = sts[-1:]
+                                    break
+                            i2 += k2
+                            if i2 >= pl:
+                                break
+                    bspans[(i, k)] = [(i, k, a, n)]
+                    if cn > n or find_bsp and cn == n:
+                        bspans[(i, k)][:] = spans[:]
+                        dq.extendleft(sts)
+
+            m = ' '.join([ctx[a2:a2+n2] for (_, _, a2, n2) in bspans[bsp]])
+        return m, bsp
+
+    m, bsp = bottom_up() if tmode == 'bup' else top_down()
+    m = regex.sub('^\s+|\s+$|\s+(?=\s)', '', m)  # remove lead/trail/multi space
+    return m, phr, len(bspans[bsp]) if bsp in bspans else 0
 
 
 def fmatch(args):
     phrs, ctxs, tgts, cids, cpts, cpts_tgt = read_fs(args)
 
-    vld_i = (i for i, phr in enumerate(phrs) if len(phr) > 1)
-    match_fn = regex_match if args.mode == 'regex' else difflib_match
-    fms = partial(fmatch_single, match_fn=match_fn)
-    res = [fms(phrs[i], ctxs[i], tgts[i], cpts_tgt[i]) for i in tqdm(vld_i)]
-    avg_chrf = sum([sentence_chrf(m, [p]).score if m else 0. for m, p in res])\
-            / len(res)
-    return avg_chrf
+    match_fn = regex_match if args.mmode == 'regex' else difflib_match
+    fms = partial(fmatch_single, match_fn=match_fn, tmode=args.tmode)
+    vld_set = (t for t in zip(phrs, ctxs, tgts, cpts_tgt) if len(t[0]) > 1)
+    res = [fms(*t) for t in tqdm(vld_set)]
+
+    chrfs = np.array([sentence_chrf(m, [p]).score if m else 0. for m, p, _ in res])
+    n_sps = np.array([n_sp for _, _, n_sp in res])
+    return (chrfs.mean(), chrfs.std()), (n_sps.mean(), n_sps.std())
 
 
 def read_fs(args):
@@ -119,13 +181,15 @@ def read_fs(args):
 
 
 def main(args):
-    avg_chrf = fmatch(args)
-    print(f'Avg. chrF++: {avg_chrf:.4f}')
+    chrf_t, n_sp_t = fmatch(args)
+    print(f'Avg. chrF++:\t{chrf_t[0]:.4f} ± {chrf_t[1]:.4f}')
+    print(f'Avg. spans:\t{n_sp_t[0]:.4f} ± {n_sp_t[1]:.4f}')
 
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('--mode', default='difflib', choices=['regex', 'difflib'])
+    ap.add_argument('--mmode', default='difflib', choices=['regex', 'difflib'])
+    ap.add_argument('--tmode', default='bup', choices=['tdown', 'bup'])
     ap.add_argument('--lems_f', default='unmatch_lems2.json')
     ap.add_argument('--cids_f', default='pt_ids.txt')
     ap.add_argument('--cpts_f', default='pts_uniq.txt')
