@@ -4,8 +4,10 @@ import difflib
 import json
 import regex
 
+from functools import partial
 from nltk import Tree
 from sacrebleu import sentence_chrf
+from tqdm import tqdm
 
 PREP = set(['besides', 'other than', 'aside from', 'in addition to'])
 
@@ -18,29 +20,27 @@ def rm_prep(phr):
     return phr
 
 
-def trav(t, s, ctx, bspans, offset, phr_spl, pl):
-    """Iterate through tree spans. Return (i, j - i)."""
-    a = -1  # start character index in context match
-    n = 0  # number of matched characters in context
-    i = s - offset  # span token index in phrase
-    k = len(t.leaves())  # span token length in phrase
-    if s < offset + pl:
-        cur_phr = ' '.join(phr_spl[i:i+k])
-        ms = difflib.SequenceMatcher(None, ctx, cur_phr).get_matching_blocks()
-        a, _, n = max(ms, key=lambda m: m.size)
-    if i < pl:
-        cn = 0
-        spans = []
-        for st in t:
-            if type(st) is Tree:
-                s, a2, n2, i2, k2 = trav(st, s, ctx, bspans, offset, phr_spl, pl)
-                if i > -1:
-                    spans.append((i2, k2, a2, n2))
-                    cn += n2
-            else:
-                s += 1
-        bspans[(i, k)] = spans if cn > n else [(i, k, a, n)]
-    return s, a, n, i, k
+def difflib_match(ctx, phr):
+    """Fuzzy matching using https://docs.python.org/3/library/difflib.html#difflib.SequenceMatcher.get_matching_blocks"""
+    ms = difflib.SequenceMatcher(None, ctx, phr).get_matching_blocks()
+    a, _, n = max(ms, key=lambda m: m.size)
+    return a, n
+
+
+def regex_match(ctx, phr):
+    """Fuzzy matching using https://pypi.org/project/regex/"""
+    ret = None
+    a, n = -1, 0
+    try:
+        # (?b) is BESTMATCH, (?e) is ENHANCEMATCH flag
+        # NOTE: n.fuzzy_counts is (sub, ins, del) count
+        m = regex.search(f'(?e){phr}{{e}}', ctx)
+        if m:
+            a, n = m.span()
+            n -= a
+    except regex._regex_core.error:  # no match
+        pass
+    return a, n
 
 
 def get_offset(tgt, phr):
@@ -56,37 +56,48 @@ def get_offset(tgt, phr):
     return offset, phr, pl if offset > -1 else 0
 
 
-def difflib_match(phr, ctx, tgt, cpt_tgt):
+def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn):
     phr = rm_prep(phr)
-    bspans = {}
     offset, phr_spl, pl = get_offset(tgt, phr)
-    _, _, _, i, k = trav(cpt_tgt, offset, ctx, bspans, offset, phr_spl, pl)
+    bspans = {}
+
+    def trav(t, s):
+        """Iterate through tree spans. Return (i, j - i)."""
+        a = -1  # start character index in context match
+        n = 0  # number of matched characters in context
+        i = s - offset  # span token index in phrase
+        k = len(t.leaves())  # span token length in phrase
+        if i > -1:
+            cur_phr = ' '.join(phr_spl[i:i+k])
+            a, n = match_fn(ctx, cur_phr)
+            cn = 0
+            spans = []
+            for st in t:
+                if type(st) is Tree:
+                    s, a2, n2, i2, k2 = trav(st, s)
+                    if i > -1:
+                        spans.append((i2, k2, a2, n2))
+                        cn += n2
+                else:
+                    s += 1
+            bspans[(i, k)] = spans if cn > n else [(i, k, a, n)]
+            n = max(cn, n)
+        return s, a, n, i, k
+
+    _, _, _, i, k = trav(cpt_tgt, offset)
     m = ''
     if (i, k) in bspans:
         m = ' '.join([ctx[a2:a2+n2] for (i2, k2, a2, n2) in bspans[(i, k)] if n2 > 1])
     return m, phr
 
 
-def regex_match(phr, ctx, tgt, cpt_tgt):
-    ret = None
-    try:
-        phr = rm_prep(phr)
-        # (?b) is BESTMATCH, (?e) is ENHANCEMATCH flag
-        # NOTE: n.fuzzy_counts is (sub, ins, del) count
-        m = regex.match(f'(?b)({phr})' + '{e}', ctx)
-        ret = m[0]
-    except regex._regex_core.error:  # no match
-        pass
-    return (ret, phr)
-
-
 def fmatch(args):
-    """Fuzzy matching using https://pypi.org/project/regex/"""
     phrs, ctxs, tgts, cids, cpts, cpts_tgt = read_fs(args)
 
     vld_i = (i for i, phr in enumerate(phrs) if len(phr) > 1)
     match_fn = regex_match if args.mode == 'regex' else difflib_match
-    res = [match_fn(phrs[i], ctxs[i], tgts[i], cpts_tgt[i]) for i in vld_i]
+    fms = partial(fmatch_single, match_fn=match_fn)
+    res = [fms(phrs[i], ctxs[i], tgts[i], cpts_tgt[i]) for i in tqdm(vld_i)]
     avg_chrf = sum([sentence_chrf(m, [p]).score if m else 0. for m, p in res])\
             / len(res)
     return avg_chrf
@@ -114,7 +125,7 @@ def main(args):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('--mode', default='regex', choices=['regex', 'difflib'])
+    ap.add_argument('--mode', default='difflib', choices=['regex', 'difflib'])
     ap.add_argument('--lems_f', default='unmatch_lems2.json')
     ap.add_argument('--cids_f', default='pt_ids.txt')
     ap.add_argument('--cpts_f', default='pts_uniq.txt')
