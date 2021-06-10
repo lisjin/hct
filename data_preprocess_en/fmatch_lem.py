@@ -72,33 +72,38 @@ def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode):
             a, n = match_fn(ctx, cur_phr)
         return a, n
 
-    def trav(t, s):
+    def trav(t, i):
         """Compare tree span matches bottom-up, replacing parent score by
         children's as necessary."""
         a = -1  # start character index in context match
         n = 0  # number of matched characters in context
-        i = s - offset  # span token index in phrase
         k = len(t.leaves())  # span token length in phrase
-        if (i, k) not in bspans:
-            a, n = search_span(i, k, phr_spl, ctx)
-            cn = 0
-            spans = []
-            for st in t:
-                if type(st) is Tree:
-                    s, a2, n2, i2, k2 = trav(st, s)
-                    if i > -1 and n2 > 1:
-                        spans.append((i2, k2, a2, n2))
+        a, n = search_span(i, k, phr_spl, ctx)
+        bspans[(i, k)] = [(i, k, a, n)]
+        cn = 0
+        spans = []
+        i2 = i
+        for st in t:
+            if type(st) is Tree:
+                k2 = len(st.leaves())
+                if -k2 < i2 and i2 < pl:
+                    n2 = trav(st, i2)
+                    if n2 > 1:
+                        spans.extend(bspans[(i2, k2)])
                         cn += n2
-                else:
-                    s += 1
-            bspans[(i, k)] = [(i, k, a, n)]
-            if cn > n:
-                bspans[(i, k)][:] = spans[:]
-                n = cn
-        return s, a, n, i, k
+                i2 += k2
+            else:
+                i2 += 1
+            if i2 >= pl:
+                break
+        if cn > n:
+            bspans[(i, k)][:] = spans[:]
+            n = cn
+        return n
 
     def bottom_up():
-        _, _, _, i, k = trav(cpt_tgt, offset)
+        i, k = -offset, len(cpt_tgt.leaves())
+        _ = trav(cpt_tgt, i)
         m = ' '.join([ctx[a2:a2+n2] for (_, _, a2, n2) in bspans[(i, k)]])
         return m, (i, k)
 
@@ -107,39 +112,45 @@ def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode):
         parent's. This helps minimize number of tree splits.
         """
         m = ''
-        bsp = (-offset, len(cpt_tgt.leaves()))
-        if offset > -1:
-            def t_score(t, i):
-                k = len(t.leaves())
-                a, n = search_span(i, k, phr_spl, ctx)
-                return a, n, k
+        i, k = bsp = (-offset, len(cpt_tgt.leaves()))
+        bspans[bsp] = [(i, k, *search_span(i, k, phr_spl, ctx))]
 
+        def iter_children(t, i, bsp, find_bsp):
+            spans, sts = [], []
+            i2 = i
+            cn = 0
+            for st in t:
+                if type(st) is Tree:
+                    k2 = len(st.leaves())
+                    if -k2 < i2 and i2 < pl:
+                        a2, n2 = search_span(i2, k2, phr_spl, ctx)
+                        if n2 > 1:
+                            bspans[(i2, k2)] = [(i2, k2, a2, n2)]
+                            spans.append((i2, k2, a2, n2))
+                            sts.append((st, i2))
+                            cn += n2
+                            if find_bsp and i2 <= 0 and i2 + k2 >= pl:
+                                bsp = (i2, k2)
+                                cn = n2
+                                spans = spans[-1:]
+                                sts = sts[-1:]
+                                break
+                    i2 += k2
+                else:
+                    i2 += 1
+                if i2 >= pl:
+                    break
+            return spans, sts, cn, bsp
+
+        if offset > -1:
             dq = deque([(cpt_tgt, -offset)])
             while dq:
                 t, i = dq.pop()
                 if type(t) is Tree:
-                    a, n, k = t_score(t, i)
-                    spans, sts = [], []
+                    k = len(t.leaves())
+                    a, n = bspans[(i, k)][0][2:]
                     find_bsp = i <= 0 and k >= pl
-                    i2 = i
-                    cn = 0
-                    for st in t:
-                        if type(st) is Tree:
-                            a2, n2, k2 = t_score(st, i2)
-                            if n2 > 1:
-                                spans.append((i2, k2, a2, n2))
-                                sts.append((st, i2))
-                                cn += n2
-                                if find_bsp and i2 <= 0 and i2 + k2 >= pl:
-                                    bsp = (i2, k2)
-                                    cn = n2
-                                    spans = spans[-1:]
-                                    sts = sts[-1:]
-                                    break
-                            i2 += k2
-                            if i2 >= pl:
-                                break
-                    bspans[(i, k)] = [(i, k, a, n)]
+                    spans, sts, cn, bsp = iter_children(t, i, bsp, find_bsp)
                     if cn > n or find_bsp and cn == n:
                         bspans[(i, k)][:] = spans[:]
                         dq.extendleft(sts)
@@ -190,7 +201,7 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--mmode', default='difflib', choices=['regex', 'difflib'])
     ap.add_argument('--tmode', default='bup', choices=['tdown', 'bup'])
-    ap.add_argument('--lems_f', default='unmatch_lems2.json')
+    ap.add_argument('--lems_f', default='unmatch_lems.json')
     ap.add_argument('--cids_f', default='pt_ids.txt')
     ap.add_argument('--cpts_f', default='pts_uniq.txt')
     ap.add_argument('--cpts_tgt_f', default='pts_tgt.txt')
