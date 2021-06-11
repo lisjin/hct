@@ -4,6 +4,9 @@ import csv
 import json
 import os
 
+from bert import tokenization
+from functools import partial
+
 
 def data_iterator(inp_dir, split):
     with open(os.path.join(inp_dir, f'{split}.json'), 'r', encoding='utf8') as f:
@@ -11,8 +14,8 @@ def data_iterator(inp_dir, split):
             yield d
 
 
-def std_sen(s):
-    return s.rstrip(' *').lower()
+def std_sen(s, tokenizer):
+    return ' '.join(tokenizer.tokenize(s.rstrip(' *')))
 
 
 def get_split(get_new_sen, inp_dir, split, keys=('History', 'Question', 'Rewrite'), st=0):
@@ -20,7 +23,7 @@ def get_split(get_new_sen, inp_dir, split, keys=('History', 'Question', 'Rewrite
     return [get_new_sen(*tuple(d[k] for k in keys[st:])) for d in data_iterator(inp_dir, split)]
 
 
-def with_context(args):
+def with_context(args, std_sen):
     def get_new_sen(sens, inp_sen, tgt_sen):
         sens = [std_sen(s) for s in sens]
         return [' [SEP] '.join(sens) + ' [CI] ' + std_sen(inp_sen), std_sen(tgt_sen)]
@@ -35,7 +38,7 @@ def with_context(args):
         proc_split(args.inp_dir, split)
 
 
-def wo_context(args):
+def wo_context(args, std_sen):
     def get_new_sen(inp_sen, tgt_sen):
         return [std_sen(inp_sen), std_sen(tgt_sen)]
 
@@ -43,7 +46,7 @@ def wo_context(args):
         return get_split(get_new_sen, inp_dir, split, st=1)
 
     datum = []
-    for split in args.splits[:2]:
+    for split in args.splits:
         datum.extend(proc_split(args.inp_dir, split))
 
     with open(f'{args.inp_dir}/train_valid_test_wo_context.tsv', 'w', encoding='utf8', newline='') as out_f:
@@ -52,10 +55,12 @@ def wo_context(args):
 
 
 def main(args):
+    tokenizer = tokenization.BasicTokenizer(do_lower_case=True)
+    std_sen2 = partial(std_sen, tokenizer=tokenizer)
     if args.use_context:
-        with_context(args)
+        with_context(args, std_sen2)
     else:
-        wo_context(args)
+        wo_context(args, std_sen2)
 
 
 if __name__ == '__main__':
