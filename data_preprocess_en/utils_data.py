@@ -21,46 +21,51 @@ def find_lcsubstr(s1, s2):
           p=i+1
   return s1[p-mmax:p].strip(), mmax
 
-def find_phrase_idx(text, phrase, last_match=False):
-    lstKey = []
-    lengthKey = 0
-    text = text.split(" [CI] ")[0]
+def find_phrase_idx(text, phrase, last_match=False, stop_phrs=None):
+  lstKey = []
+  lengthKey = 0
+  text_orig = text
+  text = text.split(" [CI] ")[0]
+  ignore_phr = False
+  if text.find(phrase) == -1:
+    found_part = False
+    phrase_spl = tuple(phrase.split())
+    for phr in stop_phrs:
+      m = len(phr)
+      if phrase_spl == phr:
+        ignore_phr = True
+        break
+      elif phrase_spl[:m] == phr and " ".join(phrase_spl[m:]) in text:
+        phrase = " ".join(phrase_spl[m:])
+        break
+      elif phrase_spl[-m:] == phr and " ".join(phrase_spl[:-m]) in text:
+        phrase = " ".join(phrase_spl[:-m])
+        break
 
-    #extra_stop_words = ["的", "是", "我", "了", "和", "有", "用", "去"]
-    #if text.find(phrase) == -1:
-    #   for word in extra_stop_words:
-    #       if phrase == word:
-    #          break
-    #       phrase_spl = phrase.split()
-    #       if phrase_spl[0] == word and " ".join(phrase_spl[1:]) in text:
-    #          phrase = " ".join(phrase_spl[1:])
-    #       elif phrase_spl[-1] == word and " ".join(phrase_spl[:-1]) in text:
-    #          phrase = " ".join(phrase_spl[:-1])
+  #if text.find(phrase) == -1:
+  #  sub_phrase, _ = find_lcsubstr(text, phrase)
+  #  if sub_phrase != '':
+  #     phrase = sub_phrase
 
-    if text.find(phrase) == -1:
-      sub_phrase, _ = find_lcsubstr(text, phrase)
-      if sub_phrase != '':
-         phrase = sub_phrase
-
-    countStr = text.count(phrase)
-    if not last_match:
-       return text.find(phrase), phrase
-
+  countStr = text.count(phrase)
+  if last_match:
     if countStr < 1:
-       lstKey.append(-1)
+      lstKey.append(-1)
     elif countStr == 1:
-         indexKey = text.find(phrase)
-         lstKey.append(indexKey)
+      indexKey = text.find(phrase)
+      lstKey.append(indexKey)
     else:
-         indexKey = text.find(phrase)
-         lstKey.append(indexKey)
-         while countStr > 1:
-              str_new = text[indexKey+1:len(text)+1]
-              indexKey_new = str_new.find(phrase)
-              indexKey = indexKey+1 +indexKey_new
-              lstKey.append(indexKey)
-              countStr -= 1
-    return lstKey[-1], phrase
+      indexKey = text.find(phrase)
+      lstKey.append(indexKey)
+      while countStr > 1:
+        str_new = text[indexKey+1:len(text)+1]
+        indexKey_new = str_new.find(phrase)
+        indexKey = indexKey+1 +indexKey_new
+        lstKey.append(indexKey)
+        countStr -= 1
+  else:
+    lstKey = (text.find(phrase),)
+  return lstKey[-1], phrase, ignore_phr
 
 def get_token_list(text):
   """Returns a list of tokens.
@@ -134,10 +139,10 @@ def _yield_discofuse_examples(
 def _yield_rewrite_examples(input_file):
   with tf.io.gfile.GFile(input_file) as f:
     for line in f:
-        line = line.replace('"', '')
-        text = line.rstrip('\n').split('\t')
-        context, cur_utt, target = text[0], text[1], text[2]
-        yield [context, cur_utt], target
+      line = line.replace('"', '')
+      text = line.rstrip('\n').split('\t')
+      context, cur_utt, target = text[0], text[1], text[2]
+      yield [context, cur_utt], target
 
 
 def read_label_map(path):
@@ -157,6 +162,6 @@ def read_label_map(path):
             raise ValueError(
                 'There should be no empty lines in the middle of the label map '
                 'file.'
-            )
-          empty_line_encountered = True
+                )
+            empty_line_encountered = True
       return label_map

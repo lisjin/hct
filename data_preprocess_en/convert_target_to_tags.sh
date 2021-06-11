@@ -8,6 +8,8 @@ python3 preprocess_main_out.py \
   --label_map_file=${OUTPUT_DIR}/label_map.txt \
   --tag_file=${OUTPUT_DIR}/tags.txt \
   --sen_file=${OUTPUT_DIR}/sentences.txt \
+  --unfound_dct_file=${OUTPUT_DIR}/unfound_phrs.json \
   --vocab_file=${BERT_BASE_DIR}/vocab.txt \
+  --stop_phrs_file=${DATA_DIR}/stop_phrs.txt \
   --output_arbitrary_targets_for_infeasible_examples=false
 

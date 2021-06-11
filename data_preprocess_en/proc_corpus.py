@@ -15,7 +15,7 @@ def data_iterator(inp_dir, split):
 
 
 def std_sen(s, tokenizer):
-    return ' '.join(tokenizer.tokenize(s.rstrip(' *')))
+    return ' '.join(tokenizer.tokenize(s))
 
 
 def get_split(get_new_sen, inp_dir, split, keys=('History', 'Question', 'Rewrite'), st=0):
