@@ -11,11 +11,9 @@ from nltk import Tree
 from sacrebleu import sentence_chrf
 from tqdm import tqdm
 
-PREP = set(['besides', 'other than', 'aside from', 'in addition to'])
 
-
-def rm_prep(phr):
-    for prep in PREP:
+def rm_stop_phr(phr, stop_phrs):
+    for prep in stop_phrs:
         if phr.find(prep) > -1:
             phr = phr.replace(prep if len(phr) == len(prep) else prep + ' ', '')
             break
@@ -58,8 +56,8 @@ def get_offset(tgt, phr):
     return offset, phr, pl if offset > -1 else 0
 
 
-def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode):
-    phr = rm_prep(phr)
+def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode, stop_phrs):
+    phr = rm_stop_phr(phr, stop_phrs)
     offset, phr_spl, pl = get_offset(tgt, phr)
     bspans = {}
 
@@ -164,10 +162,10 @@ def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode):
 
 
 def fmatch(args):
-    phrs, ctxs, tgts, cids, cpts, cpts_tgt = read_fs(args)
+    phrs, ctxs, tgts, cids, cpts, cpts_tgt, stop_phrs = read_fs(args)
 
     match_fn = regex_match if args.mmode == 'regex' else difflib_match
-    fms = partial(fmatch_single, match_fn=match_fn, tmode=args.tmode)
+    fms = partial(fmatch_single, match_fn=match_fn, tmode=args.tmode, stop_phrs=stop_phrs)
     vld_set = (t for t in zip(phrs, ctxs, tgts, cpts_tgt) if len(t[0]) > 1)
     res = [fms(*t) for t in tqdm(vld_set)]
 
@@ -187,8 +185,10 @@ def read_fs(args):
         cpts = [Tree.fromstring(l.rstrip()) for l in f]
     with open(args.cpts_tgt_f, encoding='utf8') as f:
         cpts_tgt = [Tree.fromstring(l.rstrip()) for l in f]
+    with open(args.stop_phrs_f) as f:
+        stop_phrs = [phr.strip() for phr in f.readlines()[:7]]
     assert(len(phrs) == len(ctxs) == len(tgts) == len(cids) == len(cpts_tgt))
-    return phrs, ctxs, tgts, cids, cpts, cpts_tgt
+    return phrs, ctxs, tgts, cids, cpts, cpts_tgt, stop_phrs
 
 
 def main(args):
@@ -205,5 +205,6 @@ if __name__ == '__main__':
     ap.add_argument('--cids_f', default='pt_ids.txt')
     ap.add_argument('--cpts_f', default='pts_uniq.txt')
     ap.add_argument('--cpts_tgt_f', default='pts_tgt.txt')
+    ap.add_argument('--stop_phrs_f', default='canard/stop_phrs.txt')
     args = ap.parse_args()
     main(args)

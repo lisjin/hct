@@ -124,7 +124,8 @@ class BertExampleBuilder(object):
       t = str(t)
       if len(t.split("|"))>1:
         phrase = t.split("|")[1]
-        s_ind, phrase, ignore_phr = utils.find_phrase_idx(" ".join(task.source_tokens), phrase, stop_phrs=stop_phrs)
+        src_str = ' '.join(task.source_tokens)
+        s_ind, phrase, ignore_phr = utils.find_phrase_idx(src_str, target, phrase, stop_phrs=stop_phrs)
         if s_ind==-1:
           start.append(-1)
           end.append(-1)

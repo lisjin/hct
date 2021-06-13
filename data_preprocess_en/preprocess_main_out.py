@@ -107,7 +107,7 @@ def main(argv):
         FLAGS.output_arbitrary_targets_for_infeasible_examples,
         stop_phrs=stop_phrs)
     if unfound_phrs and not ignore_phr:
-      unfound_dct[i] = {'src': sources, 'tgt': target, 'phr': unfound_phrs[:]}
+      unfound_dct[i] = {'src': sources[0], 'tgt': target, 'phr': unfound_phrs[:]}
     if example is None or example.features["can_convert"]==False:
       continue
     file_tag.write(" ".join([str(s) for s in example.features["labels"]])+"\n")

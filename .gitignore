@@ -1,11 +1,12 @@
-*.json
 .*.swp
+*.json
+*.log
+*.props
+*.tsv
 *.txt
+!requirements.txt
+!stop_phrs.txt
 __pycache__/
 chinese_L-12_H-768_A-12/
 Restoration-200K/
-data/
-data_out/
 venv/
-canard/
-canard_out/

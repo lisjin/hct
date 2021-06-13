@@ -3,9 +3,10 @@ from __future__ import division
 
 from __future__ import print_function
 
-import json
 from typing import Iterator, Mapping, Sequence, Text, Tuple
 
+import json
+import re
 import tensorflow as tf
 
 def find_lcsubstr(s1, s2):
@@ -21,24 +22,34 @@ def find_lcsubstr(s1, s2):
           p=i+1
   return s1[p-mmax:p].strip(), mmax
 
-def find_phrase_idx(text, phrase, last_match=False, stop_phrs=None):
+
+def remove_punct(phrase, target):
+  phrase = re.sub('\s[?!,]$', '', phrase.strip().lstrip(' ,'))
+  if phrase.endswith(' .'):
+    target = ' '.join(target.strip().split())
+    # Make sure phrase is at end of target string, else this is abbreviation
+    if target.find(phrase) + len(phrase) == len(target):
+      phrase = phrase.rstrip(' .')
+  return phrase
+
+
+def find_phrase_idx(text, target, phrase, last_match=False, stop_phrs=None):
   lstKey = []
   lengthKey = 0
   text_orig = text
   text = text.split(" [CI] ")[0]
   ignore_phr = False
   if text.find(phrase) == -1:
-    found_part = False
-    phrase_spl = tuple(phrase.split())
+    phrase_spl = tuple(remove_punct(phrase, target).split())
     for phr in stop_phrs:
       m = len(phr)
       if phrase_spl == phr:
         ignore_phr = True
         break
-      elif phrase_spl[:m] == phr and " ".join(phrase_spl[m:]) in text:
+      if phrase_spl[:m] == phr and " ".join(phrase_spl[m:]) in text:
         phrase = " ".join(phrase_spl[m:])
         break
-      elif phrase_spl[-m:] == phr and " ".join(phrase_spl[:-m]) in text:
+      if phrase_spl[-m:] == phr and " ".join(phrase_spl[:-m]) in text:
         phrase = " ".join(phrase_spl[:-m])
         break
 
