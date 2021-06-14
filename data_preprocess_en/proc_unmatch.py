@@ -42,18 +42,11 @@ def write_lst(f_name, lst):
         f.writelines(f'{l}\n' for l in lst)
 
 
-def cparse(outs, ids_f='pt_ids.txt', pts_f='pts_uniq.txt', pts_tgt_f='pts_tgt.txt'):
+def cparse(outs, ids_f='cpt_ids.txt', pts_f='cpts_uniq.txt', pts_tgt_f='cpts_tgt.txt'):
     pred = pretrained.load_predictor('structured-prediction-constituency-parser')
 
-    def get_pt_id(seen, s):
-        if s not in seen:
-            pt = pred.predict(s)
-            seen[s] = len(pts_uniq)
-            pts_uniq.append(pt['trees'])
-        return seen[s]
-
     def clean_s(s):
-        return s.rstrip(' *').replace('(', '-LRB-').replace(')', '-RRB-')
+        return s.replace('(', '-LRB-').replace(')', '-RRB-')
 
     def try_pred(s):
         pt_str = pred.predict(s)['trees']
@@ -83,12 +76,41 @@ def cparse(outs, ids_f='pt_ids.txt', pts_f='pts_uniq.txt', pts_tgt_f='pts_tgt.tx
     write_lst(pts_tgt_f, pts_tgt)
 
 
+def dparse(outs, ids_f='dpt_ids.txt', pts_f='dpts_uniq.txt', pts_tgt_f='dpts_tgt.txt'):
+    pred = pretrained.load_predictor('structured-prediction-biaffine-parser')
+
+    def pred_lst(s, keys=('pos', 'predicted_dependencies', 'predicted_heads')):
+        dct = pred.predict(s)
+        return ' '.join([str(x) for k in keys for x in dct[k]])
+
+    pt_ids, pts_uniq = [], []
+    seen = {}
+    pts_tgt = []
+    for i in tqdm(range(len(outs))):
+        ids = []
+        for s in outs[i][1].split('[SEP]'):
+            if s not in seen:
+                seen[s] = len(pts_uniq)
+                pts_uniq.append(pred_lst(s))
+            ids.append(seen[s])
+        pt_ids.append(','.join(map(str, ids)))
+
+        pts_tgt.append(pred_lst(outs[i][2]))
+
+    assert(len(pt_ids) == len(pts_tgt))
+    write_lst(ids_f, pt_ids)
+    write_lst(pts_f, pts_uniq)
+    write_lst(pts_tgt_f, pts_tgt)
+
+
 def main(args):
     outs = load_examples(args.unmatch_path)
     if args.lem:
         lemmatize(outs)
     if args.cparse:
         cparse(outs)
+    if args.dparse:
+        dparse(outs)
 
 
 if __name__ == '__main__':
@@ -96,5 +118,6 @@ if __name__ == '__main__':
     ap.add_argument('--unmatch_path', default='canard_out/unfound_phrs.json')
     ap.add_argument('--lem', action='store_true')
     ap.add_argument('--cparse', action='store_true')
+    ap.add_argument('--dparse', action='store_true')
     args = ap.parse_args()
     main(args)

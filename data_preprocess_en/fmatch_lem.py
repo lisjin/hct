@@ -53,22 +53,49 @@ def get_offset(tgt, phr):
         for i in (j for j, x in enumerate(tgt) if x == phr[0]):
             if tgt[i:i+pl] == phr:
                 offset = i
-    return offset, phr, pl if offset > -1 else 0
+    return offset, pl if offset > -1 else 0, phr
+
+
+def fill_word_bnd(ctx):
+    ctx_spl = ctx.split()
+    cind = -1
+    word_bnd = {cind: 0}
+    for i, w in enumerate(ctx_spl):  # map char to token indices of spaces
+        cind += len(w) + 1
+        word_bnd[cind] = len(word_bnd)
+    word_bnd[len(ctx)] = len(word_bnd)
+    return word_bnd
 
 
 def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode, stop_phrs):
+    ctx = ' '.join(ctx.split(' [SEP] '))
+    word_bnd = fill_word_bnd(ctx)
     phr = rm_stop_phr(phr, stop_phrs)
-    offset, phr_spl, pl = get_offset(tgt, phr)
+    offset, pl, phr_spl = get_offset(tgt, phr)
     bspans = {}
 
-    def search_span(i, k, phr_spl, ctx):
+    def check_span(a2, n2):
+        if a2 > -1 and a2 < len(ctx):
+            sphr = ctx[a2:a2+n2]
+            ek = a2 + n2 - 1
+            while a2 > -1 and not ctx[a2].isspace():  # closest space index <= a2
+                a2 -= 1
+            while ek < len(ctx) and not ctx[ek].isspace():  # same >= a2 + n2
+                ek += 1
+            sp = (word_bnd[a2], word_bnd[ek])
+            if ek - a2 < 2 * len(sphr):  # ignore bad matches
+                return n2, sp
+        return 0, (-1, -1)
+
+    def search_span(i, k):
         kp = k if i > -1 else k + i
         a, n = -1, 0
         if kp > 0:
             ip = max(0, i)
             cur_phr = ' '.join(phr_spl[ip:ip+kp])
             a, n = match_fn(ctx, cur_phr)
-        return a, n
+        n, sp = check_span(a, n)
+        return a, n, sp
 
     def trav(t, i):
         """Compare tree span matches bottom-up, replacing parent score by
@@ -76,8 +103,8 @@ def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode, stop_phrs):
         a = -1  # start character index in context match
         n = 0  # number of matched characters in context
         k = len(t.leaves())  # span token length in phrase
-        a, n = search_span(i, k, phr_spl, ctx)
-        bspans[(i, k)] = [(i, k, a, n)]
+        a, n, sp = search_span(i, k)
+        bspans[(i, k)] = [(i, k, a, n, sp)]
         cn = 0
         spans = []
         i2 = i
@@ -100,20 +127,18 @@ def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode, stop_phrs):
         return n
 
     def bottom_up():
-        i, k = -offset, len(cpt_tgt.leaves())
+        i, k = bsp = (-offset, len(cpt_tgt.leaves()))
         _ = trav(cpt_tgt, i)
-        m = ' '.join([ctx[a2:a2+n2] for (_, _, a2, n2) in bspans[(i, k)]])
-        return m, (i, k)
+        return bsp
 
     def top_down():
         """Stop exploring child spans if their summed match count is less than
         parent's. This helps minimize number of tree splits.
         """
-        m = ''
         i, k = bsp = (-offset, len(cpt_tgt.leaves()))
-        bspans[bsp] = [(i, k, *search_span(i, k, phr_spl, ctx))]
+        bspans[bsp] = [(i, k, *search_span(i, k))]
 
-        def iter_children(t, i, bsp, find_bsp):
+        def iter_children(t, i, k, bsp, find_bsp):
             spans, sts = [], []
             i2 = i
             cn = 0
@@ -121,18 +146,19 @@ def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode, stop_phrs):
                 if type(st) is Tree:
                     k2 = len(st.leaves())
                     if -k2 < i2 and i2 < pl:
-                        a2, n2 = search_span(i2, k2, phr_spl, ctx)
-                        if n2 > 1:
-                            bspans[(i2, k2)] = [(i2, k2, a2, n2)]
-                            spans.append((i2, k2, a2, n2))
-                            sts.append((st, i2))
-                            cn += n2
-                            if find_bsp and i2 <= 0 and i2 + k2 >= pl:
-                                bsp = (i2, k2)
-                                cn = n2
-                                spans = spans[-1:]
-                                sts = sts[-1:]
-                                break
+                        if find_bsp and i2 <= 0 and i2 + k2 >= pl:
+                            bsp = (i2, k2)
+                            bspans[bsp] = bspans[(i, k)][:]
+                            spans = bspans[bsp][:]
+                            cn = bspans[bsp][0][3]
+                            sts = [(st, i2)]
+                            break
+                        a2, n2, sp = search_span(i2, k2)
+                        itm = (i2, k2, a2, n2, sp)
+                        bspans[(i2, k2)] = [itm]
+                        spans.append(itm)
+                        sts.append((st, i2))
+                        cn += n2
                     i2 += k2
                 else:
                     i2 += 1
@@ -144,21 +170,20 @@ def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode, stop_phrs):
             dq = deque([(cpt_tgt, -offset)])
             while dq:
                 t, i = dq.pop()
-                if type(t) is Tree:
-                    k = len(t.leaves())
-                    a, n = bspans[(i, k)][0][2:]
-                    find_bsp = i <= 0 and k >= pl
-                    spans, sts, cn, bsp = iter_children(t, i, bsp, find_bsp)
-                    if cn > n or find_bsp and cn == n:
-                        bspans[(i, k)][:] = spans[:]
-                        dq.extendleft(sts)
+                k = len(t.leaves())
+                a, n = bspans[(i, k)][0][2:-1]
+                find_bsp = i <= 0 and k >= pl
+                spans, sts, cn, bsp = iter_children(t, i, k, bsp, find_bsp)
+                if cn > n or find_bsp and cn == n:
+                    bspans[(i, k)][:] = spans[:]
+                    dq.extendleft(sts)
+        return bsp
 
-            m = ' '.join([ctx[a2:a2+n2] for (_, _, a2, n2) in bspans[bsp]])
-        return m, bsp
-
-    m, bsp = bottom_up() if tmode == 'bup' else top_down()
-    m = regex.sub('^\s+|\s+$|\s+(?=\s)', '', m)  # remove lead/trail/multi space
-    return m, phr, len(bspans[bsp]) if bsp in bspans else 0
+    bsp = bottom_up() if tmode == 'bup' else top_down()
+    m = ' '.join([ctx[a2:a2+n2] for _, _, a2, n2, _ in bspans[bsp]])
+    m = regex.sub('^\s+|\s+$|\s+(?=\s)', '', m)
+    sps = [t[-1] for t in bspans[bsp]]
+    return m, phr, sps, len(bspans[bsp]) if bsp in bspans else 0
 
 
 def fmatch(args):
@@ -166,11 +191,12 @@ def fmatch(args):
 
     match_fn = regex_match if args.mmode == 'regex' else difflib_match
     fms = partial(fmatch_single, match_fn=match_fn, tmode=args.tmode, stop_phrs=stop_phrs)
-    vld_set = (t for t in zip(phrs, ctxs, tgts, cpts_tgt) if len(t[0]) > 1)
-    res = [fms(*t) for t in tqdm(vld_set)]
+    res = [fms(*t) for t in tqdm(zip(phrs, ctxs, tgts, cpts_tgt))]
 
-    chrfs = np.array([sentence_chrf(m, [p]).score if m else 0. for m, p, _ in res])
-    n_sps = np.array([n_sp for _, _, n_sp in res])
+    with open(args.out_f.format(args.mmode, args.tmode), 'w', encoding='utf8') as f:
+        json.dump([t[2] for t in res], f)
+    chrfs = np.array([sentence_chrf(m, [p]).score if m else 0. for m, p, _, _ in res])
+    n_sps = np.array([t[3] for t in res])
     return (chrfs.mean(), chrfs.std()), (n_sps.mean(), n_sps.std())
 
 
@@ -202,9 +228,10 @@ if __name__ == '__main__':
     ap.add_argument('--mmode', default='difflib', choices=['regex', 'difflib'])
     ap.add_argument('--tmode', default='bup', choices=['tdown', 'bup'])
     ap.add_argument('--lems_f', default='unmatch_lems.json')
-    ap.add_argument('--cids_f', default='pt_ids.txt')
-    ap.add_argument('--cpts_f', default='pts_uniq.txt')
-    ap.add_argument('--cpts_tgt_f', default='pts_tgt.txt')
+    ap.add_argument('--cids_f', default='canard/cpt_ids.txt')
+    ap.add_argument('--cpts_f', default='canard/cpts_uniq.txt')
+    ap.add_argument('--cpts_tgt_f', default='canard/cpts_tgt.txt')
     ap.add_argument('--stop_phrs_f', default='canard/stop_phrs.txt')
+    ap.add_argument('--out_f', default='canard/sps_{}_{}.json')
     args = ap.parse_args()
     main(args)

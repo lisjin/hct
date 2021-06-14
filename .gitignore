@@ -2,6 +2,7 @@
 *.json
 *.log
 *.props
+*.tar.gz
 *.tsv
 *.txt
 !requirements.txt
