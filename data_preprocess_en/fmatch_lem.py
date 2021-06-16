@@ -11,12 +11,13 @@ from nltk import Tree
 from sacrebleu import sentence_chrf
 from tqdm import tqdm
 
+from proc_unmatch import _read_leaf
+
 
 def rm_stop_phr(phr, stop_phrs):
     for prep in stop_phrs:
-        if phr.find(prep) > -1:
+        if phr.startswith(prep) or phr.endswith(prep):
             phr = phr.replace(prep if len(phr) == len(prep) else prep + ' ', '')
-            break
     return phr
 
 
@@ -43,17 +44,12 @@ def regex_match(ctx, phr):
     return a, n
 
 
-def get_offset(tgt, phr):
+def get_offset(phr_tgt_sps, tgt, phr):
     """Find first token position of target matching phrase. Return split phrase
     and number of phrase tokens too."""
-    offset = -1
     tgt, phr = tgt.split(), phr.split()
-    if phr:
-        pl = len(phr)
-        for i in (j for j, x in enumerate(tgt) if x == phr[0]):
-            if tgt[i:i+pl] == phr:
-                offset = i
-    return offset, pl if offset > -1 else 0, phr
+    offset, pl
+    return offset, pl, phr, tgt
 
 
 def fill_word_bnd(ctx):
@@ -67,12 +63,31 @@ def fill_word_bnd(ctx):
     return word_bnd
 
 
-def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode, stop_phrs):
+def fmatch_single(phr, ctx, tgt, cpt_tgt, phr_tgt_sp, match_fn, tmode):
     ctx = ' '.join(ctx.split(' [SEP] '))
     word_bnd = fill_word_bnd(ctx)
-    phr = rm_stop_phr(phr, stop_phrs)
-    offset, pl, phr_spl = get_offset(tgt, phr)
+    #phr = rm_stop_phr(phr, stop_phrs)
+    offset, pl = phr_tgt_sp
+    phr_spl, tgt_spl = phr.split(), tgt.split()
+    import pdb; pdb.set_trace()
     bspans = {}
+
+    def tightest_span(t, i, k):
+        if i > 0 or k < pl:
+            return None
+        sp_b = None
+        i2 = i
+        for st in t:
+            if type(st) is Tree:
+                k2 = len(st.leaves())
+                o = tightest_span(st, i, k2)
+                if o is not None:
+                    sp_b = o
+                    break
+                i2 += k2
+            else:
+                i2 += 1
+        return sp_b if sp_b else (t, i, k)
 
     def check_span(a2, n2):
         if a2 > -1 and a2 < len(ctx):
@@ -127,18 +142,22 @@ def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode, stop_phrs):
         return n
 
     def bottom_up():
-        i, k = bsp = (-offset, len(cpt_tgt.leaves()))
-        _ = trav(cpt_tgt, i)
+        i, k = -offset, len(cpt_tgt.leaves())
+        tup = tightest_span(cpt_tgt, i, k)
+        bsp = None
+        if tup is not None:
+            t, i, k = tup
+        else:
+            t = cpt_tgt
+        _ = trav(t, i)
+        bsp = (i, k)
         return bsp
 
     def top_down():
         """Stop exploring child spans if their summed match count is less than
         parent's. This helps minimize number of tree splits.
         """
-        i, k = bsp = (-offset, len(cpt_tgt.leaves()))
-        bspans[bsp] = [(i, k, *search_span(i, k))]
-
-        def iter_children(t, i, k, bsp, find_bsp):
+        def iter_children(t, i, k):
             spans, sts = [], []
             i2 = i
             cn = 0
@@ -146,52 +165,53 @@ def fmatch_single(phr, ctx, tgt, cpt_tgt, match_fn, tmode, stop_phrs):
                 if type(st) is Tree:
                     k2 = len(st.leaves())
                     if -k2 < i2 and i2 < pl:
-                        if find_bsp and i2 <= 0 and i2 + k2 >= pl:
-                            bsp = (i2, k2)
-                            bspans[bsp] = bspans[(i, k)][:]
-                            spans = bspans[bsp][:]
-                            cn = bspans[bsp][0][3]
-                            sts = [(st, i2)]
-                            break
                         a2, n2, sp = search_span(i2, k2)
                         itm = (i2, k2, a2, n2, sp)
                         bspans[(i2, k2)] = [itm]
                         spans.append(itm)
-                        sts.append((st, i2))
+                        sts.append((st, i2, k2))
                         cn += n2
                     i2 += k2
                 else:
                     i2 += 1
                 if i2 >= pl:
                     break
-            return spans, sts, cn, bsp
+            return spans, sts, cn
 
-        if offset > -1:
-            dq = deque([(cpt_tgt, -offset)])
+        i, k = -offset, len(cpt_tgt.leaves())
+        bsp = None
+        if offset > -1 and len(tgt_spl) == k:
+            t, i, k = tightest_span(cpt_tgt, -offset, len(cpt_tgt.leaves()))
+            bsp = (i, k)
+            bspans[bsp] = [(i, k, *search_span(i, k))]
+            dq = deque([(t, i, k)])
             while dq:
-                t, i = dq.pop()
-                k = len(t.leaves())
+                t, i, k = dq.pop()
                 a, n = bspans[(i, k)][0][2:-1]
-                find_bsp = i <= 0 and k >= pl
-                spans, sts, cn, bsp = iter_children(t, i, k, bsp, find_bsp)
-                if cn > n or find_bsp and cn == n:
+                spans, sts, cn = iter_children(t, i, k)
+                if cn > n:
                     bspans[(i, k)][:] = spans[:]
                     dq.extendleft(sts)
         return bsp
 
     bsp = bottom_up() if tmode == 'bup' else top_down()
-    m = ' '.join([ctx[a2:a2+n2] for _, _, a2, n2, _ in bspans[bsp]])
-    m = regex.sub('^\s+|\s+$|\s+(?=\s)', '', m)
-    sps = [t[-1] for t in bspans[bsp]]
-    return m, phr, sps, len(bspans[bsp]) if bsp in bspans else 0
+    m, sps, n_sp = '', None, 0
+    if bsp:
+        m = ' '.join([ctx[a2:a2+n2] for _, _, a2, n2, _ in bspans[bsp]])
+        m = regex.sub('^\s+|\s+$|\s+(?=\s)', '', m)
+        sps = [t[-1] for t in bspans[bsp]]
+        n_sp = len(bspans[bsp])
+    return m, phr, sps, n_sp
 
 
 def fmatch(args):
-    phrs, ctxs, tgts, cids, cpts, cpts_tgt, stop_phrs = read_fs(args)
+    phrs, ctxs, tgts, cids, cpts, cpts_tgt, phr_tgt_sps = read_fs(args)
 
     match_fn = regex_match if args.mmode == 'regex' else difflib_match
-    fms = partial(fmatch_single, match_fn=match_fn, tmode=args.tmode, stop_phrs=stop_phrs)
-    res = [fms(*t) for t in tqdm(zip(phrs, ctxs, tgts, cpts_tgt))]
+    fms = partial(fmatch_single, match_fn=match_fn, tmode=args.tmode)
+    #res = [fms(*t) for t in tqdm(zip(phrs, ctxs, tgts, cpts_tgt, phr_tgt_sps))]
+    res = [fmt(phrs[i][j], ctxs[i], tgts[i], cpts_tgt[i], phr_tgt_sps[i][j])\
+            for i in range(len(phrs)) for j in range(len(phrs[i]))]
 
     with open(args.out_f.format(args.mmode, args.tmode), 'w', encoding='utf8') as f:
         json.dump([t[2] for t in res], f)
@@ -202,19 +222,22 @@ def fmatch(args):
 
 def read_fs(args):
     """Returns (phrs, ctxs, tgts, phr tree IDs, unique phr trees, tgt trees)."""
-    with open(args.lems_f, 'r', encoding='utf8') as f:
+    with open(args.lems_f, encoding='utf8') as f:
         lems = json.load(f)
-        phrs, ctxs, tgts = lems[::3], lems[1::3], lems[2::3]
+        ctxs, tgts = lems[::2], lems[1::2]
+    with open(args.phr_tgt_sps_f, encoding='utf8') as f:
+        phr_tgt_sps = json.load(f)
+        phrs = [[ctxs[i].split()[t[0]:t[0]+t[1]] for t in l2] for i, l2 in enumerate(phr_tgt_sps)]
     with open(args.cids_f, encoding='utf8') as f:
         cids = {i: l.rstrip() for i, l in enumerate(f)}
     with open(args.cpts_f, encoding='utf8') as f:
-        cpts = [Tree.fromstring(l.rstrip()) for l in f]
+        cpts = [Tree.fromstring(l.rstrip(), read_leaf=_read_leaf) for l in f]
     with open(args.cpts_tgt_f, encoding='utf8') as f:
-        cpts_tgt = [Tree.fromstring(l.rstrip()) for l in f]
+        cpts_tgt = [Tree.fromstring(l.rstrip(), read_leaf=_read_leaf) for l in f]
     with open(args.stop_phrs_f) as f:
         stop_phrs = [phr.strip() for phr in f.readlines()[:7]]
     assert(len(phrs) == len(ctxs) == len(tgts) == len(cids) == len(cpts_tgt))
-    return phrs, ctxs, tgts, cids, cpts, cpts_tgt, stop_phrs
+    return phrs, ctxs, tgts, cids, cpts, cpts_tgt, phr_tgt_sps
 
 
 def main(args):
@@ -227,11 +250,12 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--mmode', default='difflib', choices=['regex', 'difflib'])
     ap.add_argument('--tmode', default='bup', choices=['tdown', 'bup'])
-    ap.add_argument('--lems_f', default='unmatch_lems.json')
+    ap.add_argument('--lems_f', default='canard/unmatch_lems.json')
     ap.add_argument('--cids_f', default='canard/cpt_ids.txt')
     ap.add_argument('--cpts_f', default='canard/cpts_uniq.txt')
     ap.add_argument('--cpts_tgt_f', default='canard/cpts_tgt.txt')
     ap.add_argument('--stop_phrs_f', default='canard/stop_phrs.txt')
+    ap.add_argument('--phr_tgt_sps_f', default='canard/phr_tgt_sps.json')
     ap.add_argument('--out_f', default='canard/sps_{}_{}.json')
     args = ap.parse_args()
     main(args)
