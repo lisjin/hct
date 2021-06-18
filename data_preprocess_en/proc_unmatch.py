@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
-from __future__ import print_function
-
 import argparse
 import json
 import os
-import sys
 
 from allennlp.data.tokenizers.spacy_tokenizer import SpacyTokenizer
 from allennlp_models import pretrained
 from nltk import Tree
 from tqdm import tqdm
 
-
-def eprint(*args, **kwargs):
-    print(*args, file=sys.stderr, **kwargs)
+from utils import eprint, _read_leaf
 
 
 def load_examples(unmatch_path, phr_tgt_sps_f, language='en_core_web_sm'):
@@ -40,6 +35,7 @@ def load_examples(unmatch_path, phr_tgt_sps_f, language='en_core_web_sm'):
     sps_lst = [] if not os.path.exists(phr_tgt_sps_f) else None
     with open(unmatch_path, 'r', encoding='utf8') as f:
         for l in json.load(f).values():
+            # Prevent tokenizing [SEP] tag by replacing it with |
             ctx = ' '.join(std_sen(l['src'].split('[CI]')[0].replace('[SEP]', '|')))
             tgt_spl = std_sen(l['tgt'])
             outs.append((ctx, ' '.join(tgt_spl)))
@@ -58,12 +54,13 @@ def lemmatize(outs, lem_f):
     """Lemmatize context, target pairs in `outs`."""
     import stanza
     from stanza.server import CoreNLPClient
-    stanza.download('en')
-    stanza.install_corenlp()
+    if not os.path.isdir('/home/lisjin/stanza_resources'):
+        stanza.download('en')
+    if not os.path.isdir('/home/lisjin/stanza_corenlp'):
+        stanza.install_corenlp()
 
     with CoreNLPClient(annotators=['tokenize','ssplit','pos','lemma'], memory=\
         '12G', endpoint='http://localhost:9001', be_quiet=True) as client:
-        # Prevent tokenizing [SEP] tag by replacing it with |
         lems = [' '.join([word.lemma for sentence in client.annotate(s)\
                 .sentence for word in sentence.token]) for o in outs for s in o]
         with open(lem_f, 'w', encoding='utf8') as f:
@@ -73,10 +70,6 @@ def lemmatize(outs, lem_f):
 def write_lst(f_name, lst):
     with open(f_name, 'w', encoding='utf8') as f:
         f.writelines(f'{l}\n' for l in lst)
-
-
-def _read_leaf(x):
-    return x.replace('{', '(').replace('}', ')')
 
 
 def cparse(outs, ids_f='cpt_ids.txt', pts_f='cpts_uniq.txt', pts_tgt_f='cpts_tgt.txt'):
@@ -131,7 +124,7 @@ def dparse(outs, ids_f='dpt_ids.txt', pts_f='dpts_uniq.txt', pts_tgt_f='dpts_tgt
     pts_tgt = []
     for i in tqdm(range(len(outs))):
         ids = []
-        for s in outs[i][0].split('|'):
+        for s in outs[i][0].split(' | '):
             if s not in seen:
                 seen[s] = len(pts_uniq)
                 pts_uniq.append(pred_lst(s))
