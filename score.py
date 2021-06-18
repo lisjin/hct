@@ -23,7 +23,7 @@ class Metrics(object):
         bleu2s = corpus_bleu([[r] for r in references], candidates, weights=(0.5, 0.5, 0.0, 0.0))
         bleu3s = corpus_bleu([[r] for r in references], candidates, weights=(0.33, 0.33, 0.33, 0.0))
         bleu4s = corpus_bleu([[r] for r in references], candidates, weights=(0.25, 0.25, 0.25, 0.25)) 
-        print("average bleus: bleu1: %.3f, bleu2: %.3f, bleu3: %.3f, bleu4: %.4f" % (bleu1s, bleu2s, bleu3s, bleu4s))
+        print("Avg. BLEU(n):\t%.3f (1)\t%.3f (2)\t%.3f (3)\t%.3f (4)" % (bleu1s, bleu2s, bleu3s, bleu4s))
         return (bleu1s, bleu2s, bleu3s, bleu4s)
 
     @staticmethod

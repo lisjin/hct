@@ -43,8 +43,8 @@ def read_expand(phr_tgt_sps_f, ctxs=None, tgts=None, cpts_tgt=None):
         ctxs[:] = expand_flat(ctxs, phr_tgt_sps)
     phrs = None
     if tgts:
-        tgts[:] = expand_flat(tgts, phr_tgt_sps)
         phrs = expand_phrs(tgts, phr_tgt_sps)
+        tgts[:] = expand_flat(tgts, phr_tgt_sps)
     if cpts_tgt:
         cpts_tgt = expand_flat(cpts_tgt, phr_tgt_sps)
     return cpts_tgt, ctxs, tgts, phrs, phr_tgt_sps

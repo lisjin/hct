@@ -2,8 +2,10 @@
 import argparse
 import difflib
 import json
+import os
 import numpy as np
 import regex
+import sys
 
 from collections import deque
 from functools import partial
@@ -13,6 +15,8 @@ from os import cpu_count
 from pathos.multiprocessing import ProcessingPool as Pool
 from sacrebleu import sentence_chrf
 
+sys.path.insert(1, os.path.join(sys.path[0], '..'))
+from score import Metrics
 from utils import eprint, fromstring, read_lem, read_expand, tightest_span
 
 
@@ -58,7 +62,7 @@ def fmatch_single(phr_spl, ctx, tgt, cpt_tgt, phr_tgt_sp, match_fn, tmode):
     phr = ' '.join(phr_spl)
     bspans = {}
 
-    def check_span(a, n, ctx_spl=ctx_spl, phr=phr):
+    def check_span(a, n):
         if a > -1 and a < len(ctx):
             sphr = ctx[a:a+n]
             ek = a + n - 1
@@ -127,14 +131,13 @@ def fmatch_single(phr_spl, ctx, tgt, cpt_tgt, phr_tgt_sp, match_fn, tmode):
         for st in t:
             if type(st) is Tree:
                 k2 = len(st.leaves())
-                if i2 + k2 > 0 and i2 < pl:
-                    a2, n2, sp = search_span(i2, k2)
-                    if sp[0] > -1:
-                        itm = (i2, k2, a2, n2, sp)
-                        bspans[(i2, k2)] = [itm]
-                        spans.append(itm)
-                        sts.append((st, i2, k2))
-                        cn += n2
+                cur_sp = (i2, k2)
+                if -k2 < i2 and i2 < pl:
+                    a2, n2, sp = search_span(*cur_sp)
+                    bspans[cur_sp] = [(*cur_sp, a2, n2, sp)]
+                    spans.append(bspans[cur_sp][-1])
+                    sts.append((st, *cur_sp))
+                    cn += n2
                 i2 += k2
             else:
                 i2 += 1
@@ -142,7 +145,16 @@ def fmatch_single(phr_spl, ctx, tgt, cpt_tgt, phr_tgt_sp, match_fn, tmode):
                 break
         return spans, sts, cn
 
-    def top_down(ctx=ctx, tgt=tgt, phr_spl=phr_spl):
+    def expand_bspans(k, out=[]):
+        if k in bspans:
+            if len(bspans[k]) > 1:
+                for sp in bspans[k]:
+                    expand_bspans(sp[:2], out)
+            elif len(bspans[k]):
+                out.append(bspans[k][0])
+        return out
+
+    def top_down():
         """Stop exploring child spans if their summed match count is less than
         parent's. This helps minimize number of tree splits.
         """
@@ -155,11 +167,13 @@ def fmatch_single(phr_spl, ctx, tgt, cpt_tgt, phr_tgt_sp, match_fn, tmode):
             dq = deque([(t, i, k)])
             while dq:
                 t, i, k = dq.pop()
-                n = bspans[(i, k)][0][-2]
                 spans, sts, cn = iter_children(t, i, k)
-                if cn > n:
+
+                n = bspans[(i, k)][0][-2]
+                if cn > n or n == 0:
                     bspans[(i, k)][:] = spans[:]
                     dq.extendleft(sts)
+        bspans[bsp][:] = expand_bspans(bsp)
         return bsp
 
     bsp = bottom_up() if tmode == 'bup' else top_down()
@@ -168,10 +182,10 @@ def fmatch_single(phr_spl, ctx, tgt, cpt_tgt, phr_tgt_sp, match_fn, tmode):
         bspans[bsp] = [t for t in bspans[bsp] if t[-2] > 0]
         sps = [t[-1] for t in bspans[bsp]]
         ctx_spl = ctx.split()
-        m = ' '.join(chain.from_iterable([ctx_spl[t[0]:t[1]] for t in sps]))
+        m = list(chain.from_iterable([ctx_spl[t[0]:t[1]] for t in sps]))
         n_sp = len(bspans[bsp])
         if args.print_found:
-            eprint(f'{n_sp}\t{m}\t{phr}')
+            eprint(f'{n_sp}\t{" ".join(m)}\t{phr}')
     return m, phr, sps, n_sp
 
 
@@ -188,8 +202,10 @@ def fmatch(args):
 
     with open(args.out_f.format(args.mmode, args.tmode), 'w', encoding='utf8') as f:
         json.dump([t[2] for t in res], f)
-    chrfs = np.array([sentence_chrf(m, [p]).score if m else 0. for m, p, _, _ in res])
-    n_sps = np.array([t[3] for t in res])
+    cands, _, _, n_sps = zip(*res)
+    n_sps = np.array(n_sps)
+    bleu_tup = Metrics.bleu_score(phrs, cands)
+    chrfs = np.array([sentence_chrf(' '.join(m), [p]).score if m else 0. for m, p, _, _ in res])
     return (chrfs.mean(), chrfs.std()), (n_sps.mean(), n_sps.std())
 
 
@@ -208,8 +224,8 @@ def read_fs(args):
 
 def main(args):
     chrf_t, n_sp_t = fmatch(args)
-    print(f'Avg. chrF++:\t{chrf_t[0]:.4f} ± {chrf_t[1]:.4f}')
-    print(f'Avg. spans:\t{n_sp_t[0]:.4f} ± {n_sp_t[1]:.4f}')
+    print(f'Avg. chrF++:\t{chrf_t[0]:.3f} ± {chrf_t[1]:.3f}')
+    print(f'Avg. spans:\t{n_sp_t[0]:.3f} ± {n_sp_t[1]:.3f}')
 
 
 if __name__ == '__main__':
