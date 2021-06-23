@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 import json
+import os
 import sys
 
 from functools import partial
 from itertools import chain
 from nltk import Tree
+
+sys.path.insert(1, os.path.join(sys.path[0], '..'))
+from score import Metrics
 
 
 def eprint(*args, **kwargs):
@@ -48,6 +52,11 @@ def read_expand(phr_tgt_sps_f, ctxs=None, tgts=None, cpts_tgt=None):
     if cpts_tgt:
         cpts_tgt = expand_flat(cpts_tgt, phr_tgt_sps)
     return cpts_tgt, ctxs, tgts, phrs, phr_tgt_sps
+
+
+def read_stop_phrs(stop_phrs_f):
+    with open(stop_phrs_f, 'r') as f:
+        return [l.strip().split() for l in f]
 
 
 def tightest_span(t, i, k, pl):

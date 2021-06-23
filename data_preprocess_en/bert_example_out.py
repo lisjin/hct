@@ -79,7 +79,7 @@ class BertExampleBuilder(object):
       sources,
       target = None,
       use_arbitrary_target_ids_for_infeasible_examples = False,
-      stop_phrs = None
+      phrs_new = None
   ):
     """Constructs a BERT Example.
 
@@ -117,20 +117,26 @@ class BertExampleBuilder(object):
     start = []
     end = []
     labels_ = []
-    unfound_phrs = []
     can_convert = True
-    ignore_phr = False
-    for t in tags:
+    if phrs_new is None:
+      unfound_phrs = []
+    else:
+      i2 = 0
+    for i, t in enumerate(tags):
       t = str(t)
       if len(t.split("|"))>1:
         phrase = t.split("|")[1]
         src_str = ' '.join(task.source_tokens)
-        s_ind, phrase, ignore_phr = utils.find_phrase_idx(src_str, target, phrase, stop_phrs=stop_phrs)
+        s_ind, phrase = utils.find_phrase_idx(src_str, target, phrase)
         if s_ind==-1:
           start.append(-1)
           end.append(-1)
           can_convert = False
-          unfound_phrs.append(phrase)
+          if phrs_new is None:
+            unfound_phrs.append(phrase)
+          else:
+            tags[i].added_phrase = phrs_new[i2]
+            i2 += 1
         else:
           start.append(s_ind)
           end.append(s_ind+len(phrase)-1)
@@ -169,7 +175,8 @@ class BertExampleBuilder(object):
         task=task,
         default_label=self._keep_tag_id)
     #example.pad_to_max_length(self._max_seq_length, self._pad_id)
-    return example, unfound_phrs if unfound_phrs else None, ignore_phr
+    ret = ' '.join(tagging_converter.tag_to_sequence(task.source_tokens, tags)[:-1]) if phrs_new is not None else unfound_phrs
+    return example, ret
 
   def _get_pad_id(self):
     """Returns the ID of the [PAD] token (or 0 if it's not in the vocab)."""

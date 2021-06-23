@@ -36,7 +36,6 @@ flags.DEFINE_string('sen_file', None, 'Path to the sentence file.')
 flags.DEFINE_string('unfound_dct_file', None, 'Path to unfound phrases JSON.')
 
 flags.DEFINE_string('vocab_file', None, 'Path to the BERT vocabulary file.')
-flags.DEFINE_string('stop_phrs_file', None, 'Path to stop phrases file.')
 flags.DEFINE_integer('max_seq_length', 128, 'Maximum sequence length.')
 flags.DEFINE_bool(
     'do_lower_case', False,
@@ -79,7 +78,6 @@ def main(argv):
   flags.mark_flag_as_required('sen_file')
   flags.mark_flag_as_required('unfound_dct_file')
   flags.mark_flag_as_required('vocab_file')
-  flags.mark_flag_as_required('stop_phrs_file')
 
   label_map = utils.read_label_map(FLAGS.label_map_file)
   converter = tagging_converter.TaggingConverter(
@@ -92,22 +90,16 @@ def main(argv):
   num_converted = 0
   file_tag = open(FLAGS.tag_file, "w")
   file_sen = open(FLAGS.sen_file, "w")
-  with open(FLAGS.stop_phrs_file, 'r') as f:
-    stop_phrs = [tuple(l.strip().split()) for l in f]
 
-  unfound_dct = {}
   for i, (sources, target) in enumerate(utils.yield_sources_and_targets(
       FLAGS.input_file, FLAGS.input_format)):
     logging.log_every_n(
         logging.INFO,
         f'{i} examples processed, {num_converted} converted to tf.Example.',
         10000)
-    example, unfound_phrs, ignore_phr = builder.build_bert_example(
+    example, _ = builder.build_bert_example(
         sources, target,
-        FLAGS.output_arbitrary_targets_for_infeasible_examples,
-        stop_phrs=stop_phrs)
-    if unfound_phrs and not ignore_phr:
-      unfound_dct[i] = {'src': sources[0], 'tgt': target, 'phr': unfound_phrs[:]}
+        FLAGS.output_arbitrary_targets_for_infeasible_examples)
     if example is None or example.features["can_convert"]==False:
       continue
     file_tag.write(" ".join([str(s) for s in example.features["labels"]])+"\n")

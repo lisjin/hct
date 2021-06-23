@@ -2,10 +2,8 @@
 import argparse
 import difflib
 import json
-import os
 import numpy as np
 import regex
-import sys
 
 from collections import deque
 from functools import partial
@@ -15,9 +13,7 @@ from os import cpu_count
 from pathos.multiprocessing import ProcessingPool as Pool
 from sacrebleu import sentence_chrf
 
-sys.path.insert(1, os.path.join(sys.path[0], '..'))
-from score import Metrics
-from utils import eprint, fromstring, read_lem, read_expand, tightest_span
+from utils import eprint, fromstring, read_lem, read_expand, read_stop_phrs, tightest_span, Metrics
 
 
 def difflib_match(ctx, phr):
@@ -54,11 +50,15 @@ def fill_word_bnd(ctx):
     return ctx_spl, word_bnd
 
 
-def fmatch_single(phr_spl, ctx, tgt, cpt_tgt, phr_tgt_sp, match_fn, tmode):
+def fmatch_single(phr_spl, ctx, tgt, cpt_tgt, phr_tgt_sp, match_fn, tmode, stop_phrs):
     ctx = ' '.join(ctx.split(' | '))
     ctx_spl, word_bnd = fill_word_bnd(ctx)
     offset, pl = phr_tgt_sp
     tgt_spl = tgt.split()
+    for sp in stop_phrs:
+        if phr_spl[:len(sp)] == sp and ' '.join(sp) not in ctx:
+            phr_spl[:] = phr_spl[len(sp):]
+            break
     phr = ' '.join(phr_spl)
     bspans = {}
 
@@ -190,10 +190,10 @@ def fmatch_single(phr_spl, ctx, tgt, cpt_tgt, phr_tgt_sp, match_fn, tmode):
 
 
 def fmatch(args):
-    phrs, ctxs, tgts, cpts_tgt, phr_tgt_sps = read_fs(args)
+    phrs, ctxs, tgts, cpts_tgt, phr_tgt_sps, stop_phrs = read_fs(args)
 
     match_fn = regex_match if args.mmode == 'regex' else difflib_match
-    fms = partial(fmatch_single, match_fn=match_fn, tmode=args.tmode)
+    fms = partial(fmatch_single, match_fn=match_fn, tmode=args.tmode, stop_phrs=stop_phrs)
     if not args.debug:
         with Pool(args.n_proc) as p:
             res = p.map(fms, phrs, ctxs, tgts, cpts_tgt, phr_tgt_sps)
@@ -218,8 +218,9 @@ def read_fs(args):
     cpts_tgt, ctxs, tgts, phrs, phr_tgt_sps = read_expand(args.phr_tgt_sps_f,
             ctxs, tgts, cpts_tgt)
     phr_tgt_sps = [sp for pts in phr_tgt_sps for sp in pts]
+    stop_phrs = read_stop_phrs(args.stop_phrs_f)[:6]
     assert(len(phrs) == len(ctxs) == len(tgts) == len(phr_tgt_sps) == len(cpts_tgt))
-    return phrs, ctxs, tgts, cpts_tgt, phr_tgt_sps
+    return phrs, ctxs, tgts, cpts_tgt, phr_tgt_sps, stop_phrs
 
 
 def main(args):

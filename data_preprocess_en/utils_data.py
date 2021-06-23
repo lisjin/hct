@@ -33,25 +33,11 @@ def remove_punct(phrase, target):
   return phrase
 
 
-def find_phrase_idx(text, target, phrase, last_match=False, stop_phrs=None):
+def find_phrase_idx(text, target, phrase, last_match=False):
   lstKey = []
   lengthKey = 0
   text_orig = text
   text = text.split(" [CI] ")[0]
-  ignore_phr = False
-  if text.find(phrase) == -1:
-    phrase_spl = tuple(remove_punct(phrase, target).split())
-    for phr in stop_phrs:
-      m = len(phr)
-      if phrase_spl == phr:
-        ignore_phr = True
-        break
-      if phrase_spl[:m] == phr and " ".join(phrase_spl[m:]) in text:
-        phrase = " ".join(phrase_spl[m:])
-        break
-      if phrase_spl[-m:] == phr and " ".join(phrase_spl[:-m]) in text:
-        phrase = " ".join(phrase_spl[:-m])
-        break
 
   #if text.find(phrase) == -1:
   #  sub_phrase, _ = find_lcsubstr(text, phrase)
@@ -76,7 +62,7 @@ def find_phrase_idx(text, target, phrase, last_match=False, stop_phrs=None):
         countStr -= 1
   else:
     lstKey = (text.find(phrase),)
-  return lstKey[-1], phrase, ignore_phr
+  return lstKey[-1], phrase
 
 def get_token_list(text):
   """Returns a list of tokens.
