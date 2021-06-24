@@ -79,6 +79,6 @@ if __name__ == '__main__':
     ap.add_argument('--cids_f', default='canard/cpt_ids.txt')
     ap.add_argument('--cpts_uniq_f', default='canard/cpts_uniq.txt')
     ap.add_argument('--ctx_sps_f', default='canard/sps_difflib_tdown.json')
-    ap.add_argument('--n_proc', type=int, default=cpu_count() // 2)
+    ap.add_argument('--n_proc', type=int, default=2 * cpu_count() // 3)
     args = ap.parse_args()
     main(args)

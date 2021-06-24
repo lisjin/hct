@@ -33,7 +33,6 @@ flags.DEFINE_string(
     'line.')
 flags.DEFINE_string('tag_file', None, 'Path to the tag file.')
 flags.DEFINE_string('sen_file', None, 'Path to the sentence file.')
-flags.DEFINE_string('unfound_dct_file', None, 'Path to unfound phrases JSON.')
 
 flags.DEFINE_string('vocab_file', None, 'Path to the BERT vocabulary file.')
 flags.DEFINE_integer('max_seq_length', 128, 'Maximum sequence length.')
@@ -76,7 +75,6 @@ def main(argv):
   flags.mark_flag_as_required('label_map_file')
   flags.mark_flag_as_required('tag_file')
   flags.mark_flag_as_required('sen_file')
-  flags.mark_flag_as_required('unfound_dct_file')
   flags.mark_flag_as_required('vocab_file')
 
   label_map = utils.read_label_map(FLAGS.label_map_file)
@@ -110,8 +108,6 @@ def main(argv):
   #logging.info(f'Wrote:\n{FLAGS.output_tfrecord}\n{count_fname}')
   file_tag.close()
   file_sen.close()
-  with open(FLAGS.unfound_dct_file, 'w', encoding='utf8') as f:
-    json.dump(unfound_dct, f)
 
 
 if __name__ == '__main__':

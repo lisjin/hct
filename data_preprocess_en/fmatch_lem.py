@@ -51,7 +51,6 @@ def fill_word_bnd(ctx):
 
 
 def fmatch_single(phr_spl, ctx, tgt, cpt_tgt, phr_tgt_sp, match_fn, tmode, stop_phrs):
-    ctx = ' '.join(ctx.split(' | '))
     ctx_spl, word_bnd = fill_word_bnd(ctx)
     offset, pl = phr_tgt_sp
     tgt_spl = tgt.split()
@@ -237,7 +236,7 @@ if __name__ == '__main__':
     ap.add_argument('--cpts_tgt_f', default='canard/cpts_tgt.txt')
     ap.add_argument('--stop_phrs_f', default='canard/stop_phrs.txt')
     ap.add_argument('--phr_tgt_sps_f', default='canard/phr_tgt_sps.json')
-    ap.add_argument('--n_proc', type=int, default=cpu_count() // 2)
+    ap.add_argument('--n_proc', type=int, default=2 * cpu_count() // 3)
     ap.add_argument('--debug', action='store_true')
     ap.add_argument('--print_found', action='store_true')
     ap.add_argument('--out_f', default='canard/sps_{}_{}.json')

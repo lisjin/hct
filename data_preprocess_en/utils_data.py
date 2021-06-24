@@ -23,16 +23,6 @@ def find_lcsubstr(s1, s2):
   return s1[p-mmax:p].strip(), mmax
 
 
-def remove_punct(phrase, target):
-  phrase = re.sub('\s[?!,]$', '', phrase.strip().lstrip(' ,'))
-  if phrase.endswith(' .'):
-    target = ' '.join(target.strip().split())
-    # Make sure phrase is at end of target string, else this is abbreviation
-    if target.find(phrase) + len(phrase) == len(target):
-      phrase = phrase.rstrip(' .')
-  return phrase
-
-
 def find_phrase_idx(text, target, phrase, last_match=False):
   lstKey = []
   lengthKey = 0
