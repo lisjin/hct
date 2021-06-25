@@ -74,6 +74,10 @@ class BertExampleBuilder(object):
     self._pad_id = self._get_pad_id()
     self._keep_tag_id = self._label_map['KEEP']
 
+  @staticmethod
+  def ilst2str(lst):
+    return ','.join([str(s) for s in lst])
+
   def build_bert_example(
       self,
       sources,
@@ -134,8 +138,19 @@ class BertExampleBuilder(object):
           can_convert = False
           if phrs_new is None:
             unfound_phrs.append(phrase)
-          else:
-            tags[i].added_phrase = phrs_new[i2]
+          elif len(phrs_new[i2]) > 0:
+            sts, ens = [], []
+            for phr in phrs_new[i2]:
+              s_ind, _ = utils.find_phrase_idx(src_str, target, phr)
+              sts.append(s_ind)
+              ens.append(s_ind + len(phr) - 1)
+            sts.append(-1)
+            ens.append(-1)
+
+            # TODO: check that delimiter is safe
+            tags[i].added_phrase = '^'.join(phrs_new[i2])
+            start[-1], end[-1] = tuple(sts), tuple(ens)
+            can_convert = True
             i2 += 1
         else:
           start.append(s_ind)
@@ -153,17 +168,24 @@ class BertExampleBuilder(object):
 
     label_start = []
     label_end = []
+    ls, le = [], []
     for i in range(len(start)):
       if start[i] == -1 or end[i] == -1:
         label_start.append(start[i])
         label_end.append(end[i])
-      else:
+      elif type(start[i]) is int:
         label_start.append(task.char_to_word_offset[int(start[i])])
         label_end.append(task.char_to_word_offset[int(end[i])])
+      else:
+        label_start.append([task.char_to_word_offset[int(s)] for s in start[i]])
+        label_end.append([task.char_to_word_offset[int(s)] for s in end[i]])
 
     labels=[]
     for i in range(len(labels_)):
-        write = labels_[i]+"|"+str(label_start[i])+"#"+str(label_end[i])
+        label_str = str(label_start[i])+"#"+str(label_end[i]) if\
+            type(label_start[i]) is int else self.ilst2str(label_start[i]) +\
+            self.ilst2str(label_end[i])
+        write = labels_[i]+"|"+label_str
         labels.append(write)
     example = BertExample(
         input_tokens=task.source_tokens+["\t"]+target.split(),
@@ -175,7 +197,7 @@ class BertExampleBuilder(object):
         task=task,
         default_label=self._keep_tag_id)
     #example.pad_to_max_length(self._max_seq_length, self._pad_id)
-    ret = ' '.join(tagging_converter.tag_to_sequence(task.source_tokens, tags)[:-1]) if phrs_new is not None else unfound_phrs
+    ret = ' '.join(tagging_converter.tag_to_sequence(task.source_tokens, tags, multi_phr=True)[:-1]) if phrs_new is not None else unfound_phrs
     return example, ret
 
   def _get_pad_id(self):

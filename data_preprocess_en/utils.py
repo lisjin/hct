@@ -59,6 +59,11 @@ def read_stop_phrs(stop_phrs_f):
         return [l.strip().split() for l in f]
 
 
+def write_lst(f_name, lst):
+    with open(f_name, 'w', encoding='utf8') as f:
+        f.writelines(f'{l}\n' for l in lst)
+
+
 def tightest_span(t, i, k, pl):
     if i > 0 or i + k < pl:
         return None
@@ -75,3 +80,20 @@ def tightest_span(t, i, k, pl):
         else:
             i2 += 1
     return sp_b if sp_b else (t, i, k)
+
+
+def merge_sps(lst):
+    if len(lst) > 1:
+        par_i = -1
+        for j, sp in enumerate(lst[1:]):
+            if lst[j][1] == sp[0]:
+                lst[j + 1][0] = -1  # mark for deletion
+                if par_i == -1:
+                    par_i = j
+                if j == len(lst[1:]) - 1:  # write last element to parent
+                    lst[par_i][1] = sp[1]
+            elif par_i > -1:
+                lst[par_i][1] = lst[j][1]
+                par_i = -1
+        lst[:] = [sp for sp in lst if sp[0] > -1]
+    return lst

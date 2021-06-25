@@ -8,7 +8,7 @@ from allennlp_models import pretrained
 from nltk import Tree
 from tqdm import tqdm
 
-from utils import eprint, _read_leaf
+from utils import eprint, _read_leaf, write_lst
 from utils_data import yield_sources_and_targets
 
 
@@ -65,11 +65,6 @@ def lemmatize(outs, lem_f):
                 .sentence for word in sentence.token]) for o in outs for s in o]
         with open(lem_f, 'w', encoding='utf8') as f:
             json.dump(lems, f)
-
-
-def write_lst(f_name, lst):
-    with open(f_name, 'w', encoding='utf8') as f:
-        f.writelines(f'{l}\n' for l in lst)
 
 
 def cparse(outs, outs_k, args):

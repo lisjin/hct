@@ -46,7 +46,7 @@ def fill_word_bnd(ctx):
     for i, w in enumerate(ctx_spl):  # map char to token indices of spaces
         cind += len(w) + 1
         word_bnd[cind] = len(word_bnd)
-    word_bnd[len(ctx)] = len(word_bnd)
+    word_bnd[len(ctx)] = len(ctx_spl)
     return ctx_spl, word_bnd
 
 
