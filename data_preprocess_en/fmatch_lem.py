@@ -13,7 +13,7 @@ from os import cpu_count
 from pathos.multiprocessing import ProcessingPool as Pool
 from sacrebleu import sentence_chrf
 
-from utils import eprint, fromstring, read_lem, read_expand, read_stop_phrs, tightest_span, Metrics
+from utils import eprint, fromstring, read_lem, read_expand, read_stop_phrs, tightest_span, Metrics, concat_path
 
 
 def difflib_match(ctx, phr):
@@ -199,7 +199,7 @@ def fmatch(args):
     else:
         res = [fms(*t) for t in zip(phrs, ctxs, tgts, cpts_tgt, phr_tgt_sps)]
 
-    with open(args.out_f.format(args.mmode, args.tmode), 'w', encoding='utf8') as f:
+    with open(concat_path(args, args.out_f.format(args.mmode, args.tmode)), 'w', encoding='utf8') as f:
         json.dump([t[2] for t in res], f)
     cands, _, _, n_sps = zip(*res)
     n_sps = np.array(n_sps)
@@ -211,10 +211,10 @@ def fmatch(args):
 def read_fs(args):
     """Returns (phrs, ctxs, tgts, phr tree IDs, unique phr trees, tgt trees)."""
     with Pool(args.n_proc) as p:
-        with open(args.cpts_tgt_f, encoding='utf8') as f:
+        with open(concat_path(args, 'cpts_tgt.txt'), encoding='utf8') as f:
             cpts_tgt = p.map(fromstring, [l.rstrip() for l in f])
-    ctxs, tgts = read_lem(args.lem_f)
-    cpts_tgt, ctxs, tgts, phrs, phr_tgt_sps = read_expand(args.phr_tgt_sps_f,
+    ctxs, tgts = read_lem(concat_path(args, 'unmatch_lems.json'))
+    cpts_tgt, ctxs, tgts, phrs, phr_tgt_sps = read_expand(concat_path(args, 'phr_tgt_sps.json'),
             ctxs, tgts, cpts_tgt)
     phr_tgt_sps = [sp for pts in phr_tgt_sps for sp in pts]
     stop_phrs = read_stop_phrs(args.stop_phrs_f)[:6]
@@ -230,15 +230,14 @@ def main(args):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
+    ap.add_argument('--split', default='train', choices=['train', 'dev', 'test'])
+    ap.add_argument('--data_dir', default='canard')
     ap.add_argument('--mmode', default='difflib', choices=['regex', 'difflib'])
     ap.add_argument('--tmode', default='bup', choices=['tdown', 'bup'])
-    ap.add_argument('--lem_f', default='canard/unmatch_lems.json')
-    ap.add_argument('--cpts_tgt_f', default='canard/cpts_tgt.txt')
     ap.add_argument('--stop_phrs_f', default='canard/stop_phrs.txt')
-    ap.add_argument('--phr_tgt_sps_f', default='canard/phr_tgt_sps.json')
     ap.add_argument('--n_proc', type=int, default=2 * cpu_count() // 3)
     ap.add_argument('--debug', action='store_true')
     ap.add_argument('--print_found', action='store_true')
-    ap.add_argument('--out_f', default='canard/sps_{}_{}.json')
+    ap.add_argument('--out_f', default='sps_{}_{}.json')
     args = ap.parse_args()
     main(args)

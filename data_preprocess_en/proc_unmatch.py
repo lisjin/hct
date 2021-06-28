@@ -8,7 +8,7 @@ from allennlp_models import pretrained
 from nltk import Tree
 from tqdm import tqdm
 
-from utils import eprint, _read_leaf, write_lst
+from utils import eprint, _read_leaf, write_lst, concat_path
 from utils_data import yield_sources_and_targets
 
 
@@ -30,8 +30,9 @@ def load_examples(args):
         return sps
 
     outs_k, outs = set(), []
-    sps_lst = [] if not os.path.exists(args.phr_tgt_sps_f) else None
-    with open(args.unmatch_path, 'r', encoding='utf8') as f:
+    phr_tgt_sps_f = concat_path(args, 'phr_tgt_sps.json')
+    sps_lst = [] if not os.path.exists(phr_tgt_sps_f) else None
+    with open(concat_path(args, 'unfound_phrs.json'), 'r', encoding='utf8') as f:
         unmatch_dct = json.load(f)
         for k, l in unmatch_dct.items():
             # Prevent tokenizing [SEP] tag by replacing it with |
@@ -45,7 +46,7 @@ def load_examples(args):
                 sps = align_phr_tgt(phr_spls, tgt_spl)
                 sps_lst.append(sps[:])
     if sps_lst is not None:
-        with open(args.phr_tgt_sps_f, 'w', encoding='utf8') as f:
+        with open(phr_tgt_sps_f, 'w', encoding='utf8') as f:
             json.dump(sps_lst, f)
     return outs_k, outs
 
@@ -74,8 +75,11 @@ def cparse(outs, outs_k, args):
         return s.replace('(', '{').replace(')', '}')
 
     def try_pred(s, p):
-        pt_str = pred.predict_w_pos(s, p)['trees']
-        ntok = len(s.split())
+        try:
+            pt_str = pred.predict_w_pos(s, p)['trees']
+            ntok = len(s.split())
+        except AssertionError:
+            return ''
         try:
             t = Tree.fromstring(pt_str)
             assert(len(t.leaves()) == ntok)
@@ -88,7 +92,7 @@ def cparse(outs, outs_k, args):
                 return ''
         return pt_str
 
-    pos = [(t[0][0].split(' [CI] ')[0], t[1]) for k, t in enumerate(yield_sources_and_targets(args.train_pos_f, args.train_fmt)) if k in outs_k]
+    pos = [(t[0][0].split(' [CI] ')[0], t[1]) for k, t in enumerate(yield_sources_and_targets(os.path.join(args.data_dir, f'{args.split}_pos.tsv'), args.tsv_fmt)) if k in outs_k]
     assert(len(pos) == len(outs))
 
     pt_ids, pts_uniq = [], []
@@ -107,9 +111,9 @@ def cparse(outs, outs_k, args):
         pts_tgt.append(try_pred(outs[i][1], pos[i][1]))
 
     assert(len(pt_ids) == len(pts_tgt))
-    write_lst(args.cids_f, pt_ids)
-    write_lst(args.cpts_uniq_f, pts_uniq)
-    write_lst(args.cpts_tgt_f, pts_tgt)
+    write_lst(concat_path(args, 'cpt_ids.txt'), pt_ids)
+    write_lst(concat_path(args, 'cpts_uniq.txt'), pts_uniq)
+    write_lst(concat_path(args, 'cpts_tgt.txt'), pts_tgt)
 
 
 def dparse(outs, ids_f='dpt_ids.txt', pts_f='dpts_uniq.txt', pts_tgt_f='dpts_tgt.txt'):
@@ -142,7 +146,7 @@ def dparse(outs, ids_f='dpt_ids.txt', pts_f='dpts_uniq.txt', pts_tgt_f='dpts_tgt
 def main(args):
     outs_k, outs = load_examples(args)
     if args.lem:
-        lemmatize(outs, args.lem_f)
+        lemmatize(outs, concat_path(args, 'unmatch_lems.json'))
     if args.cparse:
         cparse(outs, outs_k, args)
     if args.dparse:
@@ -151,16 +155,11 @@ def main(args):
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('--unmatch_path', default='canard/unfound_phrs.json')
-    ap.add_argument('--phr_tgt_sps_f', default='canard/phr_tgt_sps.json')
-    ap.add_argument('--lem_f', default='canard/unmatch_lems.json')
+    ap.add_argument('--split', default='train', choices=['train', 'dev', 'test'])
+    ap.add_argument('--data_dir', default='canard')
     ap.add_argument('--lem', action='store_true')
     ap.add_argument('--cparse', action='store_true')
-    ap.add_argument('--cids_f', default='canard/cpt_ids.txt')
-    ap.add_argument('--cpts_uniq_f', default='canard/cpts_uniq.txt')
-    ap.add_argument('--cpts_tgt_f', default='canard/cpts_tgt.txt')
-    ap.add_argument('--train_pos_f', default='canard/train_pos.tsv')
-    ap.add_argument('--train_fmt', default='wikisplit')
+    ap.add_argument('--tsv_fmt', default='wikisplit')
     ap.add_argument('--dparse', action='store_true')
     args = ap.parse_args()
     main(args)

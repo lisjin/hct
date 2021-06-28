@@ -51,10 +51,10 @@ def with_context(args, std_sen):
         data = get_split(get_new_sen, inp_dir, split, args.n_proc)
         data_t, data_p = list(zip(*data))
 
-        with open(f'{inp_dir}/{split}.tsv', 'w', encoding='utf8', newline='') as f:
+        with open(os.path.join(inp_dir, f'{split}.tsv'), 'w', encoding='utf8', newline='') as f:
             tsv_writer = csv.writer(f, delimiter='\t')
             tsv_writer.writerows(data_t)
-        with open(f'{inp_dir}/{split}_pos.tsv', 'w', encoding='utf8', newline='') as f:
+        with open(os.path.join(inp_dir, f'{split}_pos.tsv'), 'w', encoding='utf8', newline='') as f:
             tsv_writer = csv.writer(f, delimiter='\t')
             tsv_writer.writerows(data_p)
 

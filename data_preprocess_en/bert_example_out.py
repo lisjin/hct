@@ -133,25 +133,25 @@ class BertExampleBuilder(object):
         src_str = ' '.join(task.source_tokens)
         s_ind, phrase = utils.find_phrase_idx(src_str, target, phrase)
         if s_ind==-1:
-          start.append(-1)
-          end.append(-1)
-          can_convert = False
-          if phrs_new is None:
-            unfound_phrs.append(phrase)
-          elif len(phrs_new[i2]) > 0:
+          if phrs_new is not None and len(phrs_new[i2]) > 0:
             sts, ens = [], []
             for phr in phrs_new[i2]:
               s_ind, _ = utils.find_phrase_idx(src_str, target, phr)
               sts.append(s_ind)
               ens.append(s_ind + len(phr) - 1)
-            sts.append(-1)
-            ens.append(-1)
 
             # TODO: check that delimiter is safe
             tags[i].added_phrase = '^'.join(phrs_new[i2])
-            start[-1], end[-1] = tuple(sts), tuple(ens)
+            start.append(tuple(sts))
+            end.append(tuple(ens))
             can_convert = True
             i2 += 1
+          else:
+            if phrs_new is None:
+              unfound_phrs.append(phrase)
+            start.append(-1)
+            end.append(-1)
+            can_convert = False
         else:
           start.append(s_ind)
           end.append(s_ind+len(phrase)-1)
@@ -182,11 +182,11 @@ class BertExampleBuilder(object):
 
     labels=[]
     for i in range(len(labels_)):
-        label_str = str(label_start[i])+"#"+str(label_end[i]) if\
-            type(label_start[i]) is int else self.ilst2str(label_start[i]) +\
-            self.ilst2str(label_end[i])
-        write = labels_[i]+"|"+label_str
-        labels.append(write)
+      start_str = str(label_start[i]) if type(label_start[i]) is int\
+          else self.ilst2str(label_start[i])
+      end_str = str(label_end[i]) if type(label_end[i]) is int\
+          else self.ilst2str(label_end[i])
+      labels.append(f'{labels_[i]}|{start_str}#{end_str}')
     example = BertExample(
         input_tokens=task.source_tokens+["\t"]+target.split(),
         labels=labels,

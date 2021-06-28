@@ -19,7 +19,7 @@ def _read_leaf(x):
     return x.replace('{', '(').replace('}', ')')
 
 
-fromstring = partial(Tree.fromstring, read_leaf=_read_leaf)
+fromstring = partial(lambda x, rl: Tree.fromstring(x, read_leaf=rl) if x else Tree(None, []), rl=_read_leaf)
 
 
 def expand_flat(lst, phr_tgt_sps):
@@ -30,6 +30,11 @@ def expand_flat(lst, phr_tgt_sps):
 def expand_phrs(tgts, phr_tgt_sps):
     return [tgts[i].split()[t[0]:t[0]+t[1]] for i, l2 in enumerate(phr_tgt_sps)\
             for t in l2]
+
+
+def concat_path(args, fname, data_out=False):
+    return os.path.join(args.data_dir if not data_out else args.data_out_dir,
+            args.split, fname)
 
 
 def read_lem(lem_f):
