@@ -9,19 +9,10 @@ import torch.nn as nn
 from tqdm import trange
 from evaluate import evaluate
 from data_loader import DataLoader
-from SequenceTagger import BertForSequenceTagging
+from sequence_tagger import BertForSequenceTagging
 from transformers.optimization import get_linear_schedule_with_warmup, AdamW
-from transformers.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
+from transformers.models.gpt2.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
 import math
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='acl19', help="Directory containing the dataset")
-parser.add_argument('--model', default='acl19/w_bleu_rl_transfer_token_bugfix', help="Directory containing the model")
-parser.add_argument('--gpu', default='0', help="gpu device")
-parser.add_argument('--gpt_rl', dest='gpt_rl', action='store_true', default=False, help="if use the gpt2 model for RL")
-parser.add_argument('--seed', type=int, default=2020, help="random seed for initialization")
-parser.add_argument('--restore_dir', default=None,
-                    help="Optional, name of the directory containing weights to reload before training, e.g., 'experiments/conll/'")
 
 
 def train_epoch(model, gpt_model, data_iterator, optimizer, scheduler, params):
@@ -31,17 +22,17 @@ def train_epoch(model, gpt_model, data_iterator, optimizer, scheduler, params):
 
     # a running average object for loss
     loss_avg = utils.RunningAverage()
-    
+
     # Use tqdm for progress bar
     one_epoch = trange(params.train_steps)
     for batch in one_epoch:
         # fetch the next training batch
-        batch_data, batch_token_starts, batch_ref, batch_action, batch_start, batch_end = next(data_iterator)
+        batch_data, batch_token_starts, batch_ref, batch_action, batch_start, batch_end, batch_sp_width = next(data_iterator)
         batch_masks = batch_data.gt(0) # get padding mask
 
         # compute model output and loss
-        loss = model((batch_data, batch_token_starts, batch_ref), gpt_model, token_type_ids=None, attention_mask=batch_masks, 
-            labels_action=batch_action, labels_start=batch_start, labels_end=batch_end)[0]
+        loss = model((batch_data, batch_token_starts, batch_ref), gpt_model, attention_mask=batch_masks,
+            labels_action=batch_action, labels_start=batch_start, labels_end=batch_end, sp_width=batch_sp_width)[0]
 
         # clear previous gradients, compute gradients of all variables wrt loss
         model.zero_grad()
@@ -57,15 +48,15 @@ def train_epoch(model, gpt_model, data_iterator, optimizer, scheduler, params):
         # update the average loss
         loss_avg.update(loss.item())
         one_epoch.set_postfix(loss='{:05.3f}'.format(loss_avg()))
-    
 
-def train_and_evaluate(model, gpt_model, train_data, val_data, test_data, optimizer, scheduler, params, model_dir, restore_dir=None):
+
+def train_and_evaluate(model, gpt_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, model_dir, restore_dir=None):
     """Train the model and evaluate every epoch."""
     # reload weights from restore_dir if specified
     if restore_dir is not None:
         model = BertForSequenceTagging.from_pretrained(restore_dir)
         model.to(params.device)
-        
+
     best_val_f1 = 0.0
     patience_counter = 0
 
@@ -77,7 +68,7 @@ def train_and_evaluate(model, gpt_model, train_data, val_data, test_data, optimi
         params.train_steps = math.ceil(params.train_size / params.batch_size)
         params.val_steps = math.ceil(params.val_size / params.batch_size)
         params.test_steps = math.ceil(params.test_size / params.batch_size)
-        
+
         # data iterator for training
         train_data_iterator = data_loader.data_iterator(train_data, shuffle=True)
 
@@ -94,10 +85,10 @@ def train_and_evaluate(model, gpt_model, train_data, val_data, test_data, optimi
         # train_metrics = evaluate(model, train_data_iterator, params, mark='Train') # callback train f1
         params.eval_steps = params.val_steps
         val_metrics = evaluate(model, gpt_model, val_data_iterator, params, epoch, mark='Val')
-        
+
         val_f1 = val_metrics['em_score']
         improve_f1 = val_f1 - best_val_f1
-        #if improve_f1 > 1e-5:    
+        #if improve_f1 > 1e-5:
         #    logging.info("- Found new best EM score score")
         #    best_val_f1 = val_f1
         os.mkdir(model_dir+"/"+str(epoch))
@@ -117,11 +108,9 @@ def train_and_evaluate(model, gpt_model, train_data, val_data, test_data, optimi
         if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
             logging.info("Best val EM score: {:05.2f}".format(best_val_f1))
             break
-        
 
-if __name__ == '__main__':
-    args = parser.parse_args()
 
+def main(args):
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     tagger_model_dir = 'experiments/' + args.model
 
@@ -138,18 +127,18 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
 
     params.seed = args.seed
-    
+
     # Set the logger
     utils.set_logger(os.path.join(tagger_model_dir, 'train.log'))
-    logging.info("device: {}".format(params.device))
+    logging.info(f'Using {params.device}')
 
     # Create the input data pipeline
-    
-    # Initialize the DataLoader
-    data_dir = 'data/' + args.dataset
 
-    if args.dataset in ["canard"]:
-        bert_class = 'bert-base-cased' # auto
+    # Initialize the DataLoader
+    data_dir = 'data_preprocess_en/' + args.dataset
+
+    if args.dataset in ["canard_out"]:
+        bert_class = 'bert-base-uncased' # auto
         # bert_class = 'pretrained_bert_models/bert-base-cased/' # manual
     elif args.dataset in ["task"]:
         bert_class = 'bert-base-cased'
@@ -160,22 +149,18 @@ if __name__ == '__main__':
     elif args.dataset in ["acl19"]:
         #bert_class = 'bert-base-chinese'
         bert_class = 'pretrained_bert_models/bert-base-tagging-additive/'
-    
+
     data_loader = DataLoader(data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1)
-    
-    logging.info("Loading the datasets...")
 
     # Load training data and test data
     train_data = data_loader.load_data('train')
-    val_data = data_loader.load_data('val')
+    val_data = data_loader.load_data('dev')
     test_data = data_loader.load_data('test')
 
     # Specify the training and validation dataset sizes
     params.train_size = train_data['size']
     params.val_size = val_data['size']
     params.test_size = test_data['size']
-    
-    logging.info("Loading BERT model...")
 
     # Prepare model
     model = BertForSequenceTagging.from_pretrained(bert_class, num_labels=len(params.tag2idx))
@@ -194,15 +179,15 @@ if __name__ == '__main__':
         param_optimizer = list(model.named_parameters())
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
         optimizer_grouped_parameters = [
-            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 
+            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
              'weight_decay': params.weight_decay},
-            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 
+            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
              'weight_decay': 0.0}
         ]
     else: # only finetune the head classifier
-        param_optimizer = list(model.classifier.named_parameters()) 
+        param_optimizer = list(model.classifier.named_parameters())
         optimizer_grouped_parameters = [{'params': [p for n, p in param_optimizer]}]
-    
+
     optimizer = AdamW(optimizer_grouped_parameters, lr=params.learning_rate, correct_bias=False)
     train_steps_per_epoch = math.ceil(params.train_size // params.batch_size)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=train_steps_per_epoch, num_training_steps=params.epoch_num * train_steps_per_epoch)
@@ -210,4 +195,17 @@ if __name__ == '__main__':
     params.tagger_model_dir = tagger_model_dir
     # Train and evaluate the model
     logging.info("Starting training for {} epoch(s)".format(params.epoch_num))
-    train_and_evaluate(model, gpt_model, train_data, val_data, test_data, optimizer, scheduler, params, tagger_model_dir, args.restore_dir)
+    train_and_evaluate(model, gpt_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, tagger_model_dir, args.restore_dir)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', default='acl19', help="Directory containing the dataset")
+    parser.add_argument('--model', default='acl19/w_bleu_rl_transfer_token_bugfix', help="Directory containing the model")
+    parser.add_argument('--gpu', default='0', help="gpu device")
+    parser.add_argument('--gpt_rl', dest='gpt_rl', action='store_true', default=False, help="if use the gpt2 model for RL")
+    parser.add_argument('--seed', type=int, default=2020, help="random seed for initialization")
+    parser.add_argument('--restore_dir', default=None,
+                        help="Optional, name of the directory containing weights to reload before training, e.g., 'experiments/conll/'")
+    args = parser.parse_args()
+    main(args)

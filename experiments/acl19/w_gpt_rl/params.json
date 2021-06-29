@@ -1,12 +1,12 @@
 {
     "full_finetuning": true,
-    "max_len": 135,
+    "max_len": 128,
 
     "learning_rate": 3e-5,
     "weight_decay": 0.01,
     "clip_grad": 5,
 
-    "batch_size": 17,
+    "batch_size": 10,
     "epoch_num": 80,
     "min_epoch_num": 30,
     "patience": 0.02,

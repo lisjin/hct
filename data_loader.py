@@ -4,6 +4,8 @@ import torch
 import utils
 import random
 import numpy as np
+
+from pathos.multiprocessing import ProcessingPool as Pool
 from transformers import BertTokenizer
 
 class DataLoader(object):
@@ -24,16 +26,19 @@ class DataLoader(object):
 
         self.tokenizer = BertTokenizer.from_pretrained(bert_class, do_lower_case=False)
 
+        self.max_sp_len = 3
+        self.to_int = lambda x: int(x) + 1
 
     def load_tags(self):
         return ["KEEP", "DELETE"]
 
-    def _split_to_wordpieces_span(self, tokens, label_action, label_start, label_end):
+    def _split_to_wordpieces_span(self, tokens, label_action, label_start, label_lens, label_end, seq_width):
 
         bert_tokens = []
         bert_label_action = []
         bert_label_start = []
         bert_label_end = []
+        bert_seq_width = []
         token_start_indices = []
 
         cum_num_list = []
@@ -48,9 +53,10 @@ class DataLoader(object):
 
             bert_tokens.extend(pieces)
             bert_label_action.extend([label_action[i]] * len(pieces))
+            bert_seq_width.extend([seq_width[i]] * len(pieces))
 
-            # bugfix for tokenizer influence on label start and label end 
-            # do you know johnson jackson | yes I know him - > yes I know johnson 
+            # bugfix for tokenizer influence on label start and label end
+            # do you know johnson jackson | yes I know him - > yes I know johnson
             # Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Keep|0-0 Keep|0-0 Keep|0-0 Delete|3-4
             # do you know john #son jack #son | yes I know him
             # Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Keep|0-0 Keep|0-0 Keep|0-0 Delete|3-6
@@ -61,73 +67,69 @@ class DataLoader(object):
             cum_num_list.append(cum_num)
             cum_num += len(pieces)-1
 
+        i2, rem = -1, 0
         for i in range(len(label_start)):
+            if rem == 0:
+                i2 += 1
+                rem = label_lens[i2]
             st = label_start[i]
             ed = label_end[i]
-            bert_label_start.extend([st+cum_num_list[st]] + [0]*(curr_len_list[i]-1))
-            bert_label_end.extend([ed+cum_num_list[ed]+curr_len_list[ed]-1] + [0]*(curr_len_list[i]-1))
+            zeros = [0] * (curr_len_list[i2] - 1)
+            bert_label_start.extend([(st+cum_num_list[st] if st < len(cum_num_list) else st)] + zeros)
+            bert_label_end.extend([(ed+cum_num_list[ed]+curr_len_list[ed]-1 if ed < len(cum_num_list) else ed)] + zeros)
+            rem -= 1
 
-        return bert_tokens, bert_label_action, bert_label_start, bert_label_end, token_start_indices
+        return bert_tokens, bert_label_action, bert_label_start, bert_label_end, bert_seq_width, token_start_indices
 
-    def load_sentences_tags(self, sentences_file, tags_file, d):
-        """Loads sentences and tags from their corresponding files. 
+    def _split_multi_span(self, seq):
+        seq_out = [0]
+        seq_width = [1]
+        for si, i in enumerate(seq):
+            sid = si + 1
+            if ',' in i:
+                slst = list(map(self.to_int, i.split(',')))[:self.max_sp_len] +\
+                        [self.max_len]
+                seq_out.extend(slst)
+                seq_width.append(len(slst))
+            else:
+                seq_out.append(self.to_int(i))
+                sw = 1
+                if seq_out[-1] > 0:
+                    seq_out.append(self.max_len)
+                    sw += 1
+                seq_width.append(sw)
+        return seq_out, seq_width
+
+    def get_sens_tags(self, line):
+        line1, line2 = line
+        src, tgt = line1.split("\t")
+        tgt = " ".join(tgt.strip().split())
+        tokens = src.strip().split(' ')
+        seq = line2.strip().split(' ')
+        action_seq = [k.split("|")[0] for k in seq]
+        start_seq = [k.split("|")[1].split("#")[0] for k in seq]
+        end_seq = [k.split("|")[1].split("#")[1] for k in seq]
+        action_seq = [self.tag2idx.get(tag) for tag in action_seq]
+        tokens = ['[CLS]'] + tokens
+        action_seq = [1] + action_seq
+        start_seq, seq_width = self._split_multi_span(start_seq)
+        end_seq, _ = self._split_multi_span(end_seq)
+        bert_tokens, bert_label_action, bert_label_start, bert_label_end, bert_seq_width, token_start_idxs = self._split_to_wordpieces_span(tokens, action_seq, start_seq, seq_width, end_seq, seq_width)
+        sentence = (self.tokenizer.convert_tokens_to_ids(bert_tokens), token_start_idxs)
+        return sentence, bert_label_action, bert_label_start, bert_seq_width, bert_label_end, tgt
+
+    def load_sentences_tags(self, sentences_file, tags_file, d, n_proc=4):
+        """Loads sentences and tags from their corresponding files.
             Maps tokens and tags to their indices and stores them in the provided dict d.
         """
-        sentences = []
-
-        with open(sentences_file, 'r') as file:
-            for line in file:
-                # replace each token by its index
-                tokens = line.strip().split(' ')
-                subwords = list(map(self.tokenizer.tokenize, tokens))
-                subword_lengths = list(map(len, subwords))
-                subwords = ['[CLS]'] + [item for indices in subwords for item in indices]
-                token_start_idxs = 1 + np.cumsum([0] + subword_lengths[:-1])
-                sentences.append((self.tokenizer.convert_tokens_to_ids(subwords),token_start_idxs))
-
-        if tags_file != None:
-            sentences = []
-            ref = [] 
-            action = []
-            start = []
-            end = []
-            with open(sentences_file, 'r') as file1:
-                with open(tags_file, 'r') as file2:
-                    for line1, line2 in zip(file1,file2):
-                        src, tgt = line1.split("\t")
-                        #tgt_tokenized = self.tokenizer.tokenize(tgt.strip())
-                        #ref.append(" ".join(tgt_tokenized))
-                        tgt = " ".join(tgt.strip().split())
-                        ref.append(tgt.lower())
-                        tokens = src.strip().split(' ')
-                        seq = line2.strip().split(' ')
-                        action_seq = [k.split("|")[0] for k in seq]
-                        start_seq = [k.split("|")[1].split("#")[0] for k in seq]
-                        end_seq = [k.split("|")[1].split("#")[1] for k in seq]
-                        action_seq = [self.tag2idx.get(tag) for tag in action_seq]
-
-                        tokens = ['[CLS]'] + tokens
-                        action_seq = [1] + action_seq
-                        start_seq = [0] + [int(i)+1 for i in start_seq]
-                        end_seq = [0] + [int(i)+1 for i in end_seq]
-                        bert_tokens, bert_label_action, bert_label_start, bert_label_end, token_start_idxs = self._split_to_wordpieces_span(tokens, action_seq, start_seq, end_seq)
-                        sentences.append((self.tokenizer.convert_tokens_to_ids(bert_tokens), token_start_idxs))
-                        action.append(bert_label_action)
-                        start.append(bert_label_start)
-                        end.append(bert_label_end)
-            # checks to ensure there is a tag for each token
-            assert len(sentences) == len(action)
-            #for i in range(len(sentences)):
-            #    assert len(action[i]) == len(sentences[i][-1])
-
-            d['action'] = action
-            d['start'] = start
-            d['end'] = end
-            d["ref"] = ref
-
-        # storing sentences and tags in dict d
-        d['data'] = sentences
-        d['size'] = len(sentences)
+        with open(sentences_file, 'r') as file1:
+            with open(tags_file, 'r') as file2:
+                inp = list(zip(file1.readlines(), file2.readlines()))
+        with Pool(n_proc) as p:
+            out = p.map(self.get_sens_tags, inp)
+        d['data'], d['action'], d['start'], d['sp_width'], d['end'], d['ref'] = zip(*out)
+        d['size'] = len(d['data'])
+        assert len(d['data']) == len(d['action'])
 
     def load_data(self, data_type):
         """Loads the data for each type in types from data_dir.
@@ -138,18 +140,40 @@ class DataLoader(object):
             data: (dict) contains the data with tags for each type in types.
         """
         data = {}
-        
-        if data_type in ['train', 'val', 'test']:
-            print('Loading ' + data_type)
+        allowed = ['train', 'dev', 'test']
+        if data_type in allowed:
             sentences_file = os.path.join(self.data_dir, data_type, 'sentences.txt')
             tags_path = os.path.join(self.data_dir, data_type, 'tags.txt')
             self.load_sentences_tags(sentences_file, tags_path, data)
         elif data_type == 'interactive':
             sentences_file = os.path.join(self.data_dir, data_type, 'sentences.txt')
-            self.load_sentences_tags(sentences_file, tags_file=None, d=data)   
+            self.load_sentences_tags(sentences_file, tags_file=None, d=data)
         else:
-            raise ValueError("data type not in ['train', 'val', 'test']")
+            raise ValueError(f"data type not in {allowed}")
         return data
+
+    @staticmethod
+    def copy_data(batch_len, max_subwords_len, tags, pad):
+        batch_tags = pad * np.ones((batch_len, max_subwords_len))
+        for j in range(batch_len):
+            tlen = min(len(tags[j]), max_subwords_len)
+            batch_tags[j][:tlen] = tags[j][:tlen]
+        return batch_tags
+
+    @staticmethod
+    def copy_data_3d(batch_len, max_subwords_len, tags, pad, sp_width, max_sp_len):
+        batch_tags = np.full((batch_len, max_subwords_len, max_sp_len), pad)
+        for j in range(batch_len):
+            k2, rem = -1, 0
+            tlen = min(len(tags[j]), max_subwords_len)
+            for k in range(tlen):
+                if rem == 0:
+                    k2 += 1
+                    rem = sp_width[j][k2]
+                    batch_tags[j][k2][:rem] = tags[j][k:k+rem]
+                rem -= 1
+        batch_tags = np.where(batch_tags > max_subwords_len - 1, max_subwords_len - 1, batch_tags)
+        return batch_tags
 
     def data_iterator(self, data, shuffle=False):
         """Returns a generator that yields batches data with tags.
@@ -157,10 +181,10 @@ class DataLoader(object):
         Args:
             data: (dict) contains data which has keys 'data', 'tags' and 'size'
             shuffle: (bool) whether the data should be shuffled
-            
+
         Yields:
             batch_data: (tensor) shape: (batch_size, max_len)
-            batch_tags: (tensor) shape: (batch_size, max_len)
+            batch_tags: (tensor) shape: (batch_size, max_len, max_sp_len)
         """
 
         # make a list that decides the order in which we go over the data- this avoids explicit shuffling of data
@@ -168,8 +192,6 @@ class DataLoader(object):
         if shuffle:
             random.seed(self.seed)
             random.shuffle(order)
-        
-        interMode = False if 'action' in data else True
 
         if data['size'] % self.batch_size == 0:
             BATCH_NUM = data['size']//self.batch_size
@@ -178,36 +200,33 @@ class DataLoader(object):
 
 
         # one pass over data
+        bis = list(range(0, data['size'], self.batch_size))
+        bis.append(len(order))
         for i in range(BATCH_NUM):
             # fetch sentences and tags
-            if i * self.batch_size < data['size'] < (i+1) * self.batch_size:
-                sentences = [data['data'][idx] for idx in order[i*self.batch_size:]]
-                ref = [data['ref'][idx] for idx in order[i*self.batch_size:]]
-                if not interMode:
-                    action = [data['action'][idx] for idx in order[i*self.batch_size:]]
-                    start = [data['start'][idx] for idx in order[i*self.batch_size:]]
-                    end = [data['end'][idx] for idx in order[i*self.batch_size:]]
-            else:
-                sentences = [data['data'][idx] for idx in order[i*self.batch_size:(i+1)*self.batch_size]]
-                ref = [data['ref'][idx] for idx in order[i*self.batch_size:(i+1)*self.batch_size]]
-                if not interMode:
-                    action = [data['action'][idx] for idx in order[i*self.batch_size:(i+1)*self.batch_size]]
-                    start = [data['start'][idx] for idx in order[i*self.batch_size:(i+1)*self.batch_size]]
-                    end = [data['end'][idx] for idx in order[i*self.batch_size:(i+1)*self.batch_size]]
+            batch_max_sp_len = 0
+            sentences, ref, action, start, end, sp_width = [], [], [], [], [], []
+            for idx in order[bis[i]:bis[i + 1]]:
+                sentences.append(data['data'][idx])
+                ref.append(data['ref'][idx])
+                action.append(data['action'][idx])
+                start.append(data['start'][idx])
+                end.append(data['end'][idx])
+                sp_width.append(data['sp_width'][idx])
+                batch_max_sp_len = max(max(sp_width[-1]), batch_max_sp_len)
 
             # batch length
             batch_len = len(sentences)
+            batch_max_sp_len += 1
 
             # compute length of longest sentence in batch
             batch_max_subwords_len = max([len(s[0]) for s in sentences])
             max_subwords_len = min(batch_max_subwords_len, self.max_len)
-            max_token_len = 0
-
 
             # prepare a numpy array with the data, initialising the data with pad_idx
             batch_data = self.token_pad_idx * np.ones((batch_len, max_subwords_len))
             batch_token_starts = []
-            
+
             # copy the data to the numpy array
             for j in range(batch_len):
                 cur_subwords_len = len(sentences[j][0])
@@ -219,37 +238,17 @@ class DataLoader(object):
                 token_starts = np.zeros(max_subwords_len)
                 token_starts[[idx for idx in token_start_idx if idx < max_subwords_len]] = 1
                 batch_token_starts.append(token_starts)
-                max_token_len = max(int(sum(token_starts)), max_token_len)
-            
-            if not interMode:
-                def copy_data(batch_len, max_token_len, tags, pad):
-                    batch_tags = pad * np.ones((batch_len, max_token_len))
-                    for j in range(batch_len):
-                        cur_tags_len = len(tags[j])  
-                        if cur_tags_len <= max_token_len:
-                            batch_tags[j][:cur_tags_len] = tags[j]
-                        else:
-                            batch_tags[j] = tags[j][:max_token_len]
-                    return batch_tags
 
-                batch_action = copy_data(batch_len, max_subwords_len, action, self.tag_pad_idx)
-                batch_start = copy_data(batch_len, max_subwords_len, start, 0)
-                batch_end = copy_data(batch_len, max_subwords_len, end, 0)
-            
+            batch_action = self.copy_data(batch_len, max_subwords_len, action, self.tag_pad_idx)
+            batch_start = self.copy_data_3d(batch_len, max_subwords_len + 1, start, 0, sp_width, batch_max_sp_len)
+            batch_end = self.copy_data_3d(batch_len, max_subwords_len + 1, end, 0, sp_width, batch_max_sp_len)
+            batch_sp_width = self.copy_data(batch_len, max_subwords_len + 1, sp_width, 0)
+
             # since all data are indices, we convert them to torch LongTensors
-            batch_data = torch.tensor(batch_data, dtype=torch.long)
-            batch_token_starts = torch.tensor(batch_token_starts, dtype=torch.long)
-            if not interMode:
-                batch_action = torch.tensor(batch_action, dtype=torch.long)
-                batch_start = torch.tensor(batch_start, dtype=torch.long)
-                batch_end = torch.tensor(batch_end, dtype=torch.long)
-
-            # shift tensors to GPU if available
-            batch_data, batch_token_starts = batch_data.to(self.device), batch_token_starts.to(self.device)
-            if not interMode:
-                batch_action = batch_action.to(self.device)
-                batch_start = batch_start.to(self.device)
-                batch_end = batch_end.to(self.device)
-                yield batch_data, batch_token_starts, ref, batch_action, batch_start, batch_end
-            else:
-                yield batch_data, batch_token_starts
+            batch_data = torch.tensor(batch_data, dtype=torch.long).to(self.device)
+            batch_token_starts = torch.tensor(batch_token_starts, dtype=torch.long).to(self.device)
+            batch_action = torch.tensor(batch_action, dtype=torch.long).to(self.device)
+            batch_start = torch.tensor(batch_start, dtype=torch.long).to(self.device)
+            batch_end = torch.tensor(batch_end, dtype=torch.long).to(self.device)
+            batch_sp_width = torch.tensor(batch_sp_width, dtype=torch.long).to(self.device)
+            yield batch_data, batch_token_starts, ref, batch_action, batch_start, batch_end, batch_sp_width
