@@ -1,35 +1,29 @@
 """Evaluate the model"""
+import argparse
+import logging
+import math
 import os
+import random
 import torch
 import utils
-import random
-import logging
-import argparse
+
 import numpy as np
-import math
-from data_loader import DataLoader
-from sequence_tagger import BertForSequenceTagging
-from metrics import f1_score, get_entities, classification_report, accuracy_score
+
 from transformers.models.gpt2.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
 from transformers import BertTokenizer
 from nltk.translate.bleu_score import corpus_bleu
+
+from data_loader import DataLoader
+from metrics import f1_score, get_entities, classification_report, accuracy_score
 from score import Metrics
+from sequence_tagger import BertForSequenceTagging
+from utils import tags_to_string
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', default='acl19', help="Directory containing the dataset")
 parser.add_argument('--model', default='acl19/w_bleu_rl_transfer_token_bugfix', help="Directory containing the trained model")
 parser.add_argument('--gpu', default='0', help="gpu device")
 parser.add_argument('--seed', type=int, default=23, help="random seed for initialization")
-
-
-def convert_tokens_to_string(tokens):
-    """ Converts a sequence of tokens (string) in a single string. """
-    out_string = " ".join(tokens).replace(" ##", "").strip()
-    return out_string
-
-
-def lst2str(lst):
-    return ','.join([str(x) for x in lst])
 
 
 def convert_back_tags(pred_action, pred_start, pred_end, true_action, true_start, true_end):
@@ -41,46 +35,13 @@ def convert_back_tags(pred_action, pred_start, pred_end, true_action, true_start
         for i in range(len(pred_action[j])):
             if true_action[j][i] == '-1':
                 continue
-            p_tag = pred_action[j][i]+"|"+lst2str(pred_start[j][i])+"#"+lst2str(pred_end[j][i])
+            p_tag = pred_action[j][i]+"|"+utils.lst2str(pred_start[j][i])+"#"+utils.lst2str(pred_end[j][i])
             p_tags.append(p_tag)
-            t_tag = true_action[j][i]+"|"+lst2str(true_start[j][i])+"#"+lst2str(true_end[j][i])
+            t_tag = true_action[j][i]+"|"+utils.lst2str(true_start[j][i])+"#"+utils.lst2str(true_end[j][i])
             t_tags.append(t_tag)
         pred_tags.append(p_tags)
         true_tags.append(t_tags)
     return pred_tags, true_tags
-
-def tags_to_string(source, labels):
-    output_tokens = []
-    for token, tag in zip(source, labels):
-        added_phrase = tag.split("|")[1]
-        starts, ends = added_phrase.split("#")[0], added_phrase.split("#")[1]
-        starts, ends = starts.split(','), ends.split(',')
-        for i, start in enumerate(starts):
-            end = ends[i]
-            if int(end) != 0 and int(end)>=int(start):
-                add_phrase = source[int(start):int(end)+1]
-                add_phrase = " ".join(add_phrase)
-                output_tokens.append(add_phrase)
-        if tag.split("|")[0]=="KEEP":
-            output_tokens.append(token)
-
-    output_tokens = " ".join(output_tokens).split()
-
-    while '[SEP]' in output_tokens:
-        output_tokens.remove('[SEP]')
-    while '[UNK]' in output_tokens:
-        output_tokens.remove('[UNK]')
-    while '[CLS]' in output_tokens:
-        output_tokens.remove('[CLS]')
-    while '*' in output_tokens:
-        output_tokens.remove('*')
-
-
-    if len(output_tokens)==0:
-       output_tokens.append("*")
-    elif len(output_tokens) > 1 and output_tokens[-1]=="*":
-       output_tokens = output_tokens[:-1]
-    return convert_tokens_to_string(output_tokens)
 
 
 def eval_to_cpu(out, inp):
@@ -195,6 +156,7 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
         logging.info(report)
     return metrics
 
+
 def interAct(model, data_iterator, params, mark='Interactive', verbose=False):
     """Evaluate the model on `steps` batches."""
     # set model to evaluation mode
@@ -219,6 +181,7 @@ def interAct(model, data_iterator, params, mark='Interactive', verbose=False):
     pred_tags.extend([[idx2tag.get(idx) for idx in indices] for indices in np.argmax(batch_output, axis=2)])
 
     return(get_entities(pred_tags))
+
 
 if __name__ == '__main__':
     args = parser.parse_args()

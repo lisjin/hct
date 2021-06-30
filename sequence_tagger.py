@@ -1,18 +1,21 @@
-from transformers.models.bert.modeling_bert import *
-from torch.nn.utils.rnn import pad_sequence
+import codecs
+import json
+import math
+import os
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import os, sys, json, codecs
 
-from multi_headed_additive_attn import MultiHeadedAttention
+from transformers.models.bert.modeling_bert import *
+from torch.nn.utils.rnn import pad_sequence
 from transformers import BertTokenizer
 from torch.distributions import Categorical
-
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 cc = SmoothingFunction()
 
-import math
+from utils import lst2str, tags_to_string
+from multi_headed_additive_attn import MultiHeadedAttention
 
 # span classifier based on self-attention
 class SpanClassifier(nn.Module):
@@ -79,40 +82,18 @@ def decode_into_string(source, label_action, label_start, label_end, label_mask)
 
     labels = []
     action_map = {0:"KEEP", 1:"DELETE"}
-
     for idx in range(0, len(label_action)):
         if (idx < len(label_action) and label_mask[idx]):
-            if label_end[idx] ==0 or label_start[idx] > label_end[idx]:
+            if label_end[idx] == 0 or label_start[idx] > label_end[idx]:
                 st = 0
                 ed = 0
             else:
-                st = label_start[idx]
-                ed = label_end[idx]
+                st = lst2str(label_start[idx])
+                ed = lst2str(label_end[idx])
             labels.append(action_map[label_action[idx]]+"|"+str(st)+"#"+str(ed))
         else:
             labels.append('DELETE')
-    output_tokens = []
-    bad_toks = set(['[SEP]', '*'])
-    for token, tag in zip(source, labels):
-        if len(tag.split("|"))>1:
-            added_phrase = tag.split("|")[1]
-            start, end = added_phrase.split("#")[0], added_phrase.split("#")[1]
-            if int(end) != 0 and int(end)>=int(start):
-                add_phrase = [s for s in source[int(start):int(end)+1] if s not in bad_toks]
-                add_phrase = " ".join(add_phrase)
-                output_tokens.append(add_phrase)
-            if tag.split("|")[0]=="KEEP" and token not in bad_toks:
-                output_tokens.append(token)
-
-    output_tokens = " ".join(output_tokens).split()
-    while '' in output_tokens:
-        output_tokens.remove('')
-
-    if len(output_tokens)==0:
-        output_tokens.append("*")
-    elif len(output_tokens) > 1 and output_tokens[-1]=="*":
-        output_tokens = output_tokens[:-1]
-    #return ' '.join(output_tokens).strip()
+    output_tokens = tags_to_string(source, labels)
     return convert_tokens_to_string(output_tokens)
 
 
@@ -133,14 +114,14 @@ class BertForSequenceTagging(BertPreTrainedModel):
 
         self.init_weights()
 
-    def forward(self, input_data, gpt_model, token_type_ids=None,
+    def forward(self, input_data, rl_model, token_type_ids=None,
             attention_mask=None, labels_action=None, labels_start=None,
             labels_end=None, sp_width=None):
         input_ids, input_token_starts, input_ref = input_data
         outputs = self.bert(input_ids, attention_mask=attention_mask)
         sequence_output = outputs[0]
 
-        if gpt_model == None:
+        if rl_model == None:
             self._rl_ratio = 0.0
         logits = self.classifier(sequence_output) #[bs, seq, 2]
 
@@ -160,12 +141,18 @@ class BertForSequenceTagging(BertPreTrainedModel):
 
         loss_fct = CrossEntropyLoss()
         # Only keep active parts of the loss
-        active_loss = labels_action.gt(-1).view(-1) == 1
+        loss_mask = labels_action.gt(-1)
+        active_loss = loss_mask.view(-1) == 1
         active_logits = logits.view(-1, self.num_labels)[active_loss]
         active_labels = labels_action.view(-1)[active_loss]
         loss = loss_fct(active_logits, active_labels) + loss_span
 
         if self._rl_ratio > 0.0:
+            bsz, seq_len  = start_dist.shape[:2]
+            perm = (0, 2, 1, 3)
+            nview = (bsz, max_sp_len, seq_len, 1)
+            start_dist = start_dist.permute(*perm).reshape(-1, seq_len, seq_len)
+            end_dist = end_dist.permute(*perm).reshape(-1, seq_len, seq_len)
             samples_action = Categorical(logits=logits).sample() # [bs, seq]
             samples_start = Categorical(logits=start_dist).sample() # [bs, seq]
             samples_end = Categorical(logits=end_dist).sample() # [bs, seq]
@@ -173,9 +160,14 @@ class BertForSequenceTagging(BertPreTrainedModel):
             samples_start_prob = torch.gather(start_dist, 2, samples_start.unsqueeze(dim=2)) #[bs, seq_len, 1]
             samples_end_prob = torch.gather(end_dist, 2, samples_end.unsqueeze(dim=2)) #[bs, seq_len, 1]
 
+            samples_start = samples_start.view(*nview[:-1]).permute(*perm[:-1])
+            samples_end = samples_end.view(*nview[:-1]).permute(*perm[:-1])
+            samples_start_prob = samples_start_prob.view(*nview).permute(*perm)
+            samples_end_prob = samples_end_prob.view(*nview).permute(*perm)
+
             samples_action_prob = samples_action_prob.unsqueeze(dim=2)
-            samples_start_prob = samples_start_prob.unsqueeze(dim=2)
-            samples_end_prob = samples_end_prob.unsqueeze(dim=2)
+            samples_start_prob = samples_start_prob.unsqueeze(dim=-1)
+            samples_end_prob = samples_end_prob.unsqueeze(dim=-1)
 
             greedy_action = logits.argmax(dim=-1) # [bs, seq]
             greedy_start = start_outputs # [bs, seq]
@@ -213,10 +205,12 @@ class BertForSequenceTagging(BertPreTrainedModel):
                 input_tokens = self.tokenizer.convert_ids_to_tokens(input_ids[i].tolist())
                 sample_str = decode_into_string(input_tokens, samples_action[i].tolist(), samples_start[i].tolist(), samples_end[i].tolist(), samples_mask[i].tolist())
                 greedy_str = decode_into_string(input_tokens, greedy_action[i].tolist(), greedy_start[i].tolist(), greedy_end[i].tolist(), samples_mask[i].tolist())
-                sample_score = gpt_score(sample_str)
-                greedy_score = gpt_score(greedy_str)
-                #sample_score = sentence_bleu([input_ref[i].split()], sample_str.split(), weights=weight, smoothing_function=cc.method3)
-                #greedy_score = sentence_bleu([input_ref[i].split()], greedy_str.split(), weights=weight, smoothing_function=cc.method3)
+                if type(rl_model) is str:
+                    sample_score = sentence_bleu([input_ref[i].split()], sample_str.split(), weights=weight, smoothing_function=cc.method3)
+                    greedy_score = sentence_bleu([input_ref[i].split()], greedy_str.split(), weights=weight, smoothing_function=cc.method3)
+                elif rl_model is not None:
+                    sample_score = gpt_score(sample_str)
+                    greedy_score = gpt_score(greedy_str)
                 rewards.append(sample_score-greedy_score)
 
             rewards = torch.tensor(rewards).cuda()

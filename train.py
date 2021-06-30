@@ -15,7 +15,7 @@ from transformers.models.gpt2.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
 import math
 
 
-def train_epoch(model, gpt_model, data_iterator, optimizer, scheduler, params):
+def train_epoch(model, rl_model, data_iterator, optimizer, scheduler, params):
     """Train the model on `steps` batches"""
     # set model to training mode
     model.train()
@@ -31,7 +31,7 @@ def train_epoch(model, gpt_model, data_iterator, optimizer, scheduler, params):
         batch_masks = batch_data.gt(0) # get padding mask
 
         # compute model output and loss
-        loss = model((batch_data, batch_token_starts, batch_ref), gpt_model, attention_mask=batch_masks,
+        loss = model((batch_data, batch_token_starts, batch_ref), rl_model, attention_mask=batch_masks,
             labels_action=batch_action, labels_start=batch_start, labels_end=batch_end, sp_width=batch_sp_width)[0]
 
         # clear previous gradients, compute gradients of all variables wrt loss
@@ -50,7 +50,7 @@ def train_epoch(model, gpt_model, data_iterator, optimizer, scheduler, params):
         one_epoch.set_postfix(loss='{:05.3f}'.format(loss_avg()))
 
 
-def train_and_evaluate(model, gpt_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, model_dir, restore_dir=None):
+def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, model_dir, restore_dir=None):
     """Train the model and evaluate every epoch."""
     # reload weights from restore_dir if specified
     if restore_dir is not None:
@@ -73,7 +73,7 @@ def train_and_evaluate(model, gpt_model, data_loader, train_data, val_data, test
         train_data_iterator = data_loader.data_iterator(train_data, shuffle=True)
 
         # Train for one epoch on training set
-        train_epoch(model, gpt_model, train_data_iterator, optimizer, scheduler, params)
+        train_epoch(model, rl_model, train_data_iterator, optimizer, scheduler, params)
 
         # data iterator for evaluation
         # train_data_iterator = data_loader.data_iterator(train_data, shuffle=False)
@@ -84,7 +84,7 @@ def train_and_evaluate(model, gpt_model, data_loader, train_data, val_data, test
         # params.eval_steps = params.train_steps
         # train_metrics = evaluate(model, train_data_iterator, params, mark='Train') # callback train f1
         params.eval_steps = params.val_steps
-        val_metrics = evaluate(model, gpt_model, val_data_iterator, params, epoch, mark='Val')
+        val_metrics = evaluate(model, rl_model, val_data_iterator, params, epoch, mark='Val')
 
         val_f1 = val_metrics['em_score']
         improve_f1 = val_f1 - best_val_f1
@@ -102,7 +102,7 @@ def train_and_evaluate(model, gpt_model, data_loader, train_data, val_data, test
 
         #out of domain test data evaluation
         params.eval_steps = params.test_steps
-        #test_metrics = evaluate(model, gpt_model, test_data_iterator, params, epoch, mark='Test')
+        #test_metrics = evaluate(model, rl_model, test_data_iterator, params, epoch, mark='Test')
 
         # Early stopping and logging best f1
         if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
@@ -168,11 +168,13 @@ def main(args):
 
     if args.gpt_rl:
         print("Using GPT2 PPL as the rewards for RL training!")
-        gpt_model = GPT2LMHeadModel.from_pretrained("./dialogue_model/")
-        gpt_model.to(params.device)
-        gpt_model.eval()
+        rl_model = GPT2LMHeadModel.from_pretrained("./dialogue_model/")
+        rl_model.to(params.device)
+        rl_model.eval()
+    elif args.bleu_rl:
+        rl_model = 'bleu'
     else:
-        gpt_model = None
+        rl_model = None
 
     # Prepare optimizer
     if params.full_finetuning:
@@ -195,7 +197,7 @@ def main(args):
     params.tagger_model_dir = tagger_model_dir
     # Train and evaluate the model
     logging.info("Starting training for {} epoch(s)".format(params.epoch_num))
-    train_and_evaluate(model, gpt_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, tagger_model_dir, args.restore_dir)
+    train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, tagger_model_dir, args.restore_dir)
 
 
 if __name__ == '__main__':
@@ -204,6 +206,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', default='acl19/w_bleu_rl_transfer_token_bugfix', help="Directory containing the model")
     parser.add_argument('--gpu', default='0', help="gpu device")
     parser.add_argument('--gpt_rl', dest='gpt_rl', action='store_true', default=False, help="if use the gpt2 model for RL")
+    parser.add_argument('--bleu_rl', action='store_true')
     parser.add_argument('--seed', type=int, default=2020, help="random seed for initialization")
     parser.add_argument('--restore_dir', default=None,
                         help="Optional, name of the directory containing weights to reload before training, e.g., 'experiments/conll/'")

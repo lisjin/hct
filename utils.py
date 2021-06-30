@@ -5,6 +5,8 @@ import shutil
 import logging
 import numpy as np
 
+BAD_TOKS = set(['[CLS]', '[SEP]', '[UNK]', '*'])
+
 
 class Params():
     """Class that loads hyperparameters from a json file.
@@ -90,6 +92,7 @@ def set_logger(log_path):
         stream_handler.setFormatter(logging.Formatter('%(message)s'))
         logger.addHandler(stream_handler)
 
+
 def save_checkpoint(state, is_best, checkpoint):
     """Saves model and training parameters at checkpoint + 'last.pth.tar'. If is_best==True, also saves
     checkpoint + 'best.pth.tar'
@@ -106,6 +109,7 @@ def save_checkpoint(state, is_best, checkpoint):
     torch.save(state, filepath)
     if is_best:
         shutil.copyfile(filepath, os.path.join(checkpoint, 'best.pth.tar'))
+
 
 def load_checkpoint(checkpoint, model, optimizer=None):
     """Loads model parameters (state_dict) from file_path. If optimizer is provided, loads state_dict of
@@ -127,3 +131,40 @@ def load_checkpoint(checkpoint, model, optimizer=None):
 
     return checkpoint
 
+
+def lst2str(lst):
+    return ','.join([str(x) for x in lst])
+
+
+def convert_tokens_to_string(tokens):
+    """ Converts a sequence of tokens (string) in a single string. """
+    out_string = " ".join(tokens).replace(" ##", "").strip()
+    return out_string
+
+
+def tags_to_string(source, labels):
+    output_tokens = []
+    for token, tag in zip(source, labels):
+        added_phrase = tag.split("|")[1]
+        starts, ends = added_phrase.split("#")[0], added_phrase.split("#")[1]
+        starts, ends = starts.split(','), ends.split(',')
+        stop_i = len(starts) - 1
+        for i, start in enumerate(starts):
+            s_i, e_i = int(start), int(ends[i])
+            if e_i >= s_i and e_i > 0 and s_i < stop_i:
+                add_phrase = [s for s in source[s_i:e_i+1]]
+                if add_phrase:
+                    add_phrase = " ".join(add_phrase)
+                    output_tokens.append(add_phrase)
+            if s_i == stop_i:
+                break
+        if tag.split("|")[0]=="KEEP":
+            output_tokens.append(token)
+
+    output_tokens = " ".join(output_tokens).replace(' [SEP]', '').replace('[UNK]', '').replace('[CLS]', '').replace(' |', '').replace(' *', '').split()
+
+    if len(output_tokens)==0:
+       output_tokens.append("*")
+    elif len(output_tokens) > 1 and output_tokens[-1]=="*":
+       output_tokens = output_tokens[:-1]
+    return convert_tokens_to_string(output_tokens)
