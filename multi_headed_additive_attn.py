@@ -36,10 +36,10 @@ class Additive_Attention(nn.Module):
             weights: A tensor with shape [batch, length_q, length_kv]
         """
         def attention_bias(inputs, inf=-1e9):
-            mask = inputs
-            ret = (1.0 - mask) * inf
+            ret = (1.0 - inputs) * inf
             ret = ret.unsqueeze(dim=1)
-            ret = ret.unsqueeze(dim=1)
+            if len(ret.shape) < 4:
+                ret = ret.unsqueeze(dim=1)
             return ret
 
         bias = attention_bias(mask)
@@ -209,7 +209,7 @@ class MultiHeadedAttention(nn.Module):
 
         # 2) Calculate and scale scores.
         query = query / math.sqrt(dim_per_head)
-        
+
         # batch x num_heads x query_len x key_len
         #query_key = torch.matmul(query, key.transpose(2, 3))
 

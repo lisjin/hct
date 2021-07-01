@@ -19,12 +19,13 @@ from multi_headed_additive_attn import MultiHeadedAttention
 
 # span classifier based on self-attention
 class SpanClassifier(nn.Module):
-    def __init__(self, hidden_dim, max_relative_position):
+    def __init__(self, hidden_dim, max_relative_position, dropout=0.2):
         super(SpanClassifier, self).__init__()
         self.layer_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
         self.span_st_attn = MultiHeadedAttention(1, hidden_dim, max_relative_positions=max_relative_position)
         self.span_ed_attn = MultiHeadedAttention(1, hidden_dim, max_relative_positions=max_relative_position)
         self.comb_emb = nn.Linear(hidden_dim * 2, hidden_dim)
+        self.dropout = dropout
         if max_relative_position > 0.0:
             print("Setting max_relative_position to {}".format(max_relative_position))
 
@@ -35,17 +36,19 @@ class SpanClassifier(nn.Module):
     def upd_hid(self, attn_w, hid):
         hidc = (hid.unsqueeze(1) * attn_w.unsqueeze(-1)).sum(2)
         hidc = self.comb_emb(torch.cat((hid, hidc), -1))
-        hidc = F.relu(hidc, inplace=True)
+        hidc = F.dropout(F.relu(hidc, inplace=True), p=self.dropout, training=self.training)
         return hidc
 
-    def forward(self, hid, sp_width, max_sp_len):
+    def forward(self, hid, sp_width, max_sp_len, attention_mask):
         sts, eds, masks = [], [], []
         hid1, hid2 = hid, hid
         for i in range(max_sp_len):
-            masks.append(torch.logical_and(sp_width, i <= sp_width).float())
-            sts.append(self.span_st_attn(hid1, hid1, hid1, mask=masks[-1], type="self")) # [batch, seq, seq]
+            mask = torch.logical_and(sp_width > 0, i < sp_width).float()
+            masks.append(mask)
+            mask = mask.unsqueeze(-1) * attention_mask.unsqueeze(1)
+            sts.append(self.span_st_attn(hid1, hid1, hid1, mask=mask, type="self")) # [batch, seq, seq]
             hid1 = self.upd_hid(sts[-1], hid1)
-            eds.append(self.span_ed_attn(hid2, hid2, hid2, mask=masks[-1], type="self")) # [batch, seq, seq]
+            eds.append(self.span_ed_attn(hid2, hid2, hid2, mask=mask, type="self")) # [batch, seq, seq]
             hid2 = self.upd_hid(eds[-1], hid2)
         return torch.stack(sts, -2), torch.stack(eds, -2), torch.stack(masks, -1)
 
@@ -68,14 +71,17 @@ def span_loss(start_dist, end_dist, start_positions, end_positions, seq_masks):
     span_ed_loss = token_classification_loss_v2(end_dist, end_positions, seq_masks)
     return span_st_loss + span_ed_loss
 
+
 def clip_and_normalize(word_probs, epsilon):
     word_probs = torch.clamp(word_probs, epsilon, 1.0 - epsilon)
     return word_probs / word_probs.sum(dim=-1, keepdim=True)
+
 
 def convert_tokens_to_string(tokens):
     """ Converts a sequence of tokens (string) in a single string. """
     out_string = " ".join(tokens).replace(" ##", "").strip()
     return out_string
+
 
 def decode_into_string(source, label_action, label_start, label_end, label_mask):
     assert len(source) == len(label_action)
@@ -107,7 +113,6 @@ class BertForSequenceTagging(BertPreTrainedModel):
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
 
         self.span_classifier = SpanClassifier(config.hidden_size, 0.0)
-        self.end_span = nn.Embedding(1, config.hidden_size)
         self._rl_ratio = 0.5
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         #self._tokenizer = BertTokenizer.from_pretrained("./dialogue_model/")
@@ -125,18 +130,14 @@ class BertForSequenceTagging(BertPreTrainedModel):
             self._rl_ratio = 0.0
         logits = self.classifier(sequence_output) #[bs, seq, 2]
 
-        # Add last sequence position for end-of-span prediction
-        sequence_output = torch.cat((sequence_output,
-            self.end_span.weight[None].expand(sequence_output.shape[0], -1, -1)), 1)
-
         max_sp_len = labels_start.shape[-1]
-        start_dist, end_dist, loss_mask = self.span_classifier(sequence_output, sp_width, max_sp_len)
+        start_dist, end_dist, loss_mask = self.span_classifier(sequence_output, sp_width, max_sp_len, attention_mask)
         start_outputs = start_dist.argmax(dim=-1) # [batch, seq]
         end_outputs = end_dist.argmax(dim=-1) # [batch, seq]
 
         outputs = (logits, start_outputs, end_outputs)
-        labels_start = F.one_hot(labels_start, num_classes=labels_start.shape[1]) #[bs, seq + 1, sp_len, seq + 1]
-        labels_end = F.one_hot(labels_end, num_classes=labels_start.shape[1]) #[bs, seq + 1, sp_len, seq + 1]
+        labels_start = F.one_hot(labels_start, labels_start.shape[1]) #[bs, seq, sp_len, seq]
+        labels_end = F.one_hot(labels_end, labels_end.shape[1]) #[bs, seq, sp_len, seq]
         loss_span = span_loss(start_dist, end_dist, labels_start, labels_end, loss_mask.float())
 
         loss_fct = CrossEntropyLoss()

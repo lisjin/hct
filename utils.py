@@ -5,8 +5,6 @@ import shutil
 import logging
 import numpy as np
 
-BAD_TOKS = set(['[CLS]', '[SEP]', '[UNK]', '*'])
-
 
 class Params():
     """Class that loads hyperparameters from a json file.

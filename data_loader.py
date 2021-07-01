@@ -82,20 +82,20 @@ class DataLoader(object):
         return bert_tokens, bert_label_action, bert_label_start, bert_label_end, bert_seq_width, token_start_indices
 
     def _split_multi_span(self, seq):
-        seq_out = [0]
+        sid = 0
+        seq_out = [sid]
         seq_width = [1]
         for si, i in enumerate(seq):
-            sid = si + 1
             if ',' in i:
-                slst = list(map(self.to_int, i.split(',')))[:self.max_sp_len] +\
-                        [self.max_len]
+                slst = list(map(self.to_int, i.split(',')))
+                slst = slst[:self.max_sp_len] + [sid] * int(len(slst) < self.max_sp_len)
                 seq_out.extend(slst)
                 seq_width.append(len(slst))
             else:
                 seq_out.append(self.to_int(i))
                 sw = 1
                 if seq_out[-1] > 0:
-                    seq_out.append(self.max_len)
+                    seq_out.append(sid)
                     sw += 1
                 seq_width.append(sw)
         return seq_out, seq_width
@@ -111,7 +111,7 @@ class DataLoader(object):
         end_seq = [k.split("|")[1].split("#")[1] for k in seq]
         action_seq = [self.tag2idx.get(tag) for tag in action_seq]
         tokens = ['[CLS]'] + tokens
-        action_seq = [1] + action_seq
+        action_seq = [self.tag2idx.get('DELETE')] + action_seq
         start_seq, seq_width = self._split_multi_span(start_seq)
         end_seq, _ = self._split_multi_span(end_seq)
         bert_tokens, bert_label_action, bert_label_start, bert_label_end, bert_seq_width, token_start_idxs = self._split_to_wordpieces_span(tokens, action_seq, start_seq, seq_width, end_seq, seq_width)
@@ -172,7 +172,6 @@ class DataLoader(object):
                     rem = sp_width[j][k2]
                     batch_tags[j][k2][:rem] = tags[j][k:k+rem]
                 rem -= 1
-        batch_tags = np.where(batch_tags > max_subwords_len - 1, max_subwords_len - 1, batch_tags)
         return batch_tags
 
     def data_iterator(self, data, shuffle=False):
@@ -217,7 +216,6 @@ class DataLoader(object):
 
             # batch length
             batch_len = len(sentences)
-            batch_max_sp_len += 1
 
             # compute length of longest sentence in batch
             batch_max_subwords_len = max([len(s[0]) for s in sentences])
@@ -240,9 +238,9 @@ class DataLoader(object):
                 batch_token_starts.append(token_starts)
 
             batch_action = self.copy_data(batch_len, max_subwords_len, action, self.tag_pad_idx)
-            batch_start = self.copy_data_3d(batch_len, max_subwords_len + 1, start, 0, sp_width, batch_max_sp_len)
-            batch_end = self.copy_data_3d(batch_len, max_subwords_len + 1, end, 0, sp_width, batch_max_sp_len)
-            batch_sp_width = self.copy_data(batch_len, max_subwords_len + 1, sp_width, 0)
+            batch_start = self.copy_data_3d(batch_len, max_subwords_len, start, 0, sp_width, batch_max_sp_len)
+            batch_end = self.copy_data_3d(batch_len, max_subwords_len, end, 0, sp_width, batch_max_sp_len)
+            batch_sp_width = self.copy_data(batch_len, max_subwords_len, sp_width, 0)
 
             # since all data are indices, we convert them to torch LongTensors
             batch_data = torch.tensor(batch_data, dtype=torch.long).to(self.device)

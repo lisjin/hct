@@ -112,10 +112,9 @@ def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_
 
 def main(args):
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-    tagger_model_dir = 'experiments/' + args.model
 
     # Load the parameters from json file
-    json_path = os.path.join(tagger_model_dir, 'params.json')
+    json_path = os.path.join(args.model, 'params.json')
     assert os.path.isfile(json_path), "No json configuration file found at {}".format(json_path)
     params = utils.Params(json_path)
 
@@ -129,7 +128,7 @@ def main(args):
     params.seed = args.seed
 
     # Set the logger
-    utils.set_logger(os.path.join(tagger_model_dir, 'train.log'))
+    utils.set_logger(os.path.join(args.model, 'train.log'))
     logging.info(f'Using {params.device}')
 
     # Create the input data pipeline
@@ -194,10 +193,10 @@ def main(args):
     train_steps_per_epoch = math.ceil(params.train_size // params.batch_size)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=train_steps_per_epoch, num_training_steps=params.epoch_num * train_steps_per_epoch)
 
-    params.tagger_model_dir = tagger_model_dir
+    params.tagger_model_dir = args.model
     # Train and evaluate the model
     logging.info("Starting training for {} epoch(s)".format(params.epoch_num))
-    train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, tagger_model_dir, args.restore_dir)
+    train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, args.model, args.restore_dir)
 
 
 if __name__ == '__main__':
