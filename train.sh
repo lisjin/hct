@@ -1,5 +1,5 @@
 python train.py \
-        --dataset acl19 \
+        --dataset base_canard_out \
         --mode acl19/w_gpt_rl \
-        --gpu 2 \
+        --gpu 1 \
         --gpt_rl \

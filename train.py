@@ -11,7 +11,7 @@ from evaluate import evaluate
 from data_loader import DataLoader
 from SequenceTagger import BertForSequenceTagging
 from transformers.optimization import get_linear_schedule_with_warmup, AdamW
-from transformers.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
+from transformers.models.gpt2.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
 import math
 
 parser = argparse.ArgumentParser()
@@ -146,10 +146,10 @@ if __name__ == '__main__':
     # Create the input data pipeline
     
     # Initialize the DataLoader
-    data_dir = 'data/' + args.dataset
+    data_dir = 'data_preprocess_en/' + args.dataset
 
-    if args.dataset in ["canard"]:
-        bert_class = 'bert-base-cased' # auto
+    if args.dataset in ["base_canard_out"]:
+        bert_class = 'bert-base-uncased' # auto
         # bert_class = 'pretrained_bert_models/bert-base-cased/' # manual
     elif args.dataset in ["task"]:
         bert_class = 'bert-base-cased'
@@ -167,7 +167,7 @@ if __name__ == '__main__':
 
     # Load training data and test data
     train_data = data_loader.load_data('train')
-    val_data = data_loader.load_data('val')
+    val_data = data_loader.load_data('dev')
     test_data = data_loader.load_data('test')
 
     # Specify the training and validation dataset sizes
@@ -182,10 +182,11 @@ if __name__ == '__main__':
     model.to(params.device)
 
     if args.gpt_rl:
-        print("Using GPT2 PPL as the rewards for RL training!")
-        gpt_model = GPT2LMHeadModel.from_pretrained("./dialogue_model/")
-        gpt_model.to(params.device)
-        gpt_model.eval()
+        #print("Using GPT2 PPL as the rewards for RL training!")
+        #gpt_model = GPT2LMHeadModel.from_pretrained("./dialogue_model/")
+        #gpt_model.to(params.device)
+        #gpt_model.eval()
+        gpt_model = 'bleu'
     else:
         gpt_model = None
 

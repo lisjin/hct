@@ -10,7 +10,7 @@ import math
 from data_loader import DataLoader
 from SequenceTagger import BertForSequenceTagging
 from metrics import f1_score, get_entities, classification_report, accuracy_score
-from transformers.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
+from transformers.models.gpt2.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
 from transformers import BertTokenizer
 from nltk.translate.bleu_score import corpus_bleu
 from score import Metrics
@@ -138,7 +138,7 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
     pred_tags, true_tags = convert_back_tags(pred_action_tags, pred_start_tags, pred_end_tags, 
         true_action_tags, true_start_tags, true_end_tags)
     source = []
-    tokenizer = BertTokenizer.from_pretrained("bert-base-chinese", do_lower_case=False)
+    tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
 
     for i in range(len(source_tokens)):
         source.append(tokenizer.convert_ids_to_tokens(source_tokens[i].tolist()))

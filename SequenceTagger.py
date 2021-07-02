@@ -1,4 +1,4 @@
-from transformers.modeling_bert import *
+from transformers.models.bert.modeling_bert import *
 from torch.nn.utils.rnn import pad_sequence
 import torch
 import torch.nn as nn
@@ -33,7 +33,7 @@ class SpanClassifier(nn.Module):
         #tmp2 = tmp1.transpose(1, 2) # [batch, seq, 1]
         #square_mask = tmp2.matmul(tmp1).byte() # [batch, seq, seq]
         #square_mask = ~square_mask
-        square_mask = mask 
+        square_mask = mask
         span_st_dist = self.span_st_attn(repre, repre, repre,
                 mask=square_mask, type="self") # [batch, seq, seq]
         span_ed_dist = self.span_ed_attn(repre, repre, repre,
@@ -70,7 +70,7 @@ def convert_tokens_to_string(tokens):
 
 def decode_into_string(source, label_action, label_start, label_end, label_mask):
 	assert len(source) == len(label_action)
-	
+
 	labels = []
 	action_map = {0:"KEEP", 1:"DELETE"}
 
@@ -129,8 +129,8 @@ class BertForSequenceTagging(BertPreTrainedModel):
 
 		self.span_classifier = SpanClassifier(config.hidden_size, 0.0)
 		self._rl_ratio = 0.5
-		self.tokenizer = BertTokenizer.from_pretrained('bert-base-chinese', do_lower_case=False)
-		self._tokenizer = BertTokenizer.from_pretrained("./dialogue_model/")
+		self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=False)
+		#self._tokenizer = BertTokenizer.from_pretrained("./dialogue_model/")
 
 		self.init_weights()
 
@@ -212,7 +212,7 @@ class BertForSequenceTagging(BertPreTrainedModel):
 					#b = 6.24+3*1.99
 					#a = 6.24-3*1.99
 					if ppl > b:
-						ppl_norm = 1.0 
+						ppl_norm = 1.0
 					elif ppl < a:
 						ppl_norm = 0.0
 					else:
@@ -224,16 +224,18 @@ class BertForSequenceTagging(BertPreTrainedModel):
 					input_tokens = self.tokenizer.convert_ids_to_tokens(input_ids[i].tolist())
 					sample_str = decode_into_string(input_tokens, samples_action[i].tolist(), samples_start[i].tolist(), samples_end[i].tolist(), samples_mask[i].tolist())
 					greedy_str = decode_into_string(input_tokens, greedy_action[i].tolist(), greedy_start[i].tolist(), greedy_end[i].tolist(), samples_mask[i].tolist())
-					sample_score = Gpt_score(sample_str)
-					greedy_score = Gpt_score(greedy_str)
-					#sample_score = sentence_bleu([input_ref[i].split()], sample_str.split(), weights=weight, smoothing_function=cc.method3)
-					#greedy_score = sentence_bleu([input_ref[i].split()], greedy_str.split(), weights=weight, smoothing_function=cc.method3)
+					if type(gpt_model) != str:
+					    sample_score = Gpt_score(sample_str)
+					    greedy_score = Gpt_score(greedy_str)
+					else:
+					    sample_score = sentence_bleu([input_ref[i].split()], sample_str.split(), weights=weight, smoothing_function=cc.method3)
+					    greedy_score = sentence_bleu([input_ref[i].split()], greedy_str.split(), weights=weight, smoothing_function=cc.method3)
 					rewards.append(sample_score-greedy_score)
 
 				rewards = torch.tensor(rewards).cuda()
-            	
+
 				loss_action_rl = -1.0 * clip_and_normalize(samples_action_prob, 1e-6).log()*rewards.unsqueeze(dim=1)*samples_mask
-				loss_action_rl = loss_action_rl.sum()/samples_mask.sum() 
+				loss_action_rl = loss_action_rl.sum()/samples_mask.sum()
 				loss_st_rl = -1.0 * clip_and_normalize(samples_start_prob, 1e-6).log()*rewards.unsqueeze(dim=1)*samples_mask
 				loss_st_rl = loss_st_rl.sum()/samples_mask.sum()
 				loss_ed_rl = -1.0 * clip_and_normalize(samples_end_prob, 1e-6).log()*rewards.unsqueeze(dim=1)*samples_mask
