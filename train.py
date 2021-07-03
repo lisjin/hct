@@ -175,10 +175,9 @@ if __name__ == '__main__':
     # Prepare model
     if args.restore_dir is not None:
         model = BertForSequenceTagging.from_pretrained(args.restore_dir)
-        model.to(params.device)
     else:
         model = BertForSequenceTagging.from_pretrained(bert_class, num_labels=len(params.tag2idx))
-        model.to(params.device)
+    model.to(params.device)
 
     if args.gpt_rl:
         #print("Using GPT2 PPL as the rewards for RL training!")

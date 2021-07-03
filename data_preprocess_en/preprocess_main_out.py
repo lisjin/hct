@@ -89,6 +89,7 @@ def main(argv):
   file_tag = open(FLAGS.tag_file, "w")
   file_sen = open(FLAGS.sen_file, "w")
 
+  is_train = 'train' in FLAGS.input_file
   for i, (sources, target) in enumerate(utils.yield_sources_and_targets(
       FLAGS.input_file, FLAGS.input_format)):
     logging.log_every_n(
@@ -97,7 +98,8 @@ def main(argv):
         10000)
     example, _ = builder.build_bert_example(
         sources, target,
-        FLAGS.output_arbitrary_targets_for_infeasible_examples)
+        FLAGS.output_arbitrary_targets_for_infeasible_examples,
+        is_train=is_train)
     if example is None or example.features["can_convert"]==False:
       continue
     file_tag.write(" ".join([str(s) for s in example.features["labels"]])+"\n")

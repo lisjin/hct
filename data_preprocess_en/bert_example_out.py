@@ -83,7 +83,8 @@ class BertExampleBuilder(object):
       sources,
       target = None,
       use_arbitrary_target_ids_for_infeasible_examples = False,
-      phrs_new = None
+      phrs_new = None,
+      is_train = True
   ):
     """Constructs a BERT Example.
 
@@ -151,7 +152,8 @@ class BertExampleBuilder(object):
               unfound_phrs.append(phrase)
             start.append(-1)
             end.append(-1)
-            can_convert = False
+            if is_train:
+              can_convert = False
         else:
           start.append(s_ind)
           end.append(s_ind+len(phrase)-1)

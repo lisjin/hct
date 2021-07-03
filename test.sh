@@ -1,5 +1,5 @@
 python evaluate.py \
-        --dataset acl19 \
-        --mode acl19/w_gpt_rl_3e-5 \
-        --gpu 2 \
-
+        --dataset base_canard_out \
+        --mode acl19/w_gpt_rl \
+        --gpu 1 \
+        --restore_dir "experiments/acl19/w_gpt_rl/14"

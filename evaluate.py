@@ -20,6 +20,7 @@ parser.add_argument('--dataset', default='acl19', help="Directory containing the
 parser.add_argument('--model', default='acl19/w_bleu_rl_transfer_token_bugfix', help="Directory containing the trained model")
 parser.add_argument('--gpu', default='0', help="gpu device")
 parser.add_argument('--seed', type=int, default=23, help="random seed for initialization")
+parser.add_argument('--restore_dir', default=None)
 
 
 def convert_tokens_to_string(tokens):
@@ -100,12 +101,11 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
         # fetch the next evaluation batch
         batch_data, batch_token_starts, batch_ref, batch_action, batch_start, batch_end = next(data_iterator)
         batch_masks = batch_data.gt(0)
-        #print("batch data:", batch_data)
-        #print("batch action:", batch_action.size())
-        #print("batch reference:", len(batch_ref))
         with torch.no_grad():
-            output = model((batch_data, batch_token_starts, batch_ref), gpt_model, token_type_ids=None, attention_mask=batch_masks,
-                labels_action=batch_action, labels_start=batch_start, labels_end=batch_end)
+            output = model((batch_data, batch_token_starts, batch_ref),
+                    gpt_model, token_type_ids=None, attention_mask=batch_masks,
+                labels_action=batch_action, labels_start=batch_start,
+                labels_end=batch_end)
         loss = output[0]
         loss_avg.update(loss.item())
 
@@ -145,13 +145,9 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
 
     hypo = []
     for i in range(len(pred_tags)):
-        #print("source:", source[i])
-        #print("pred_tags:", pred_tags[i])
-        #assert len(source[i])==len(pred_tags[i])
         src = source[i][:len(pred_tags[i])]
         pred = tags_to_string(src, pred_tags[i]).strip()
         hypo.append(pred.lower())
-        #print("hypo:", pred.lower())
 
     if mark == "Test":
         file_name = "/prediction_emnlp"+"_"+str(epoch)+"_.txt"
@@ -253,10 +249,10 @@ if __name__ == '__main__':
     logging.info("Loading the dataset...")
 
     # Initialize the DataLoader
-    data_dir = 'data/' + args.dataset
+    data_dir = 'data_preprocess_en/' + args.dataset
 
-    if args.dataset in ["canard"]:
-        bert_class = 'bert-base-cased' # auto
+    if args.dataset in ["base_canard_out"]:
+        bert_class = 'bert-base-uncased' # auto
         # bert_class = 'pretrained_bert_models/bert-base-cased/' # manual
     elif args.dataset in ["emnlp19"]:
         bert_class = 'bert-base-chinese' # auto
@@ -267,13 +263,16 @@ if __name__ == '__main__':
     data_loader = DataLoader(data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1)
 
     # Load the model
-    model = BertForSequenceTagging.from_pretrained(tagger_model_dir)
+    if args.restore_dir is not None:
+        model = BertForSequenceTagging.from_pretrained(args.restore_dir)
+    else:
+        model = BertForSequenceTagging.from_pretrained(tagger_model_dir)
     model.to(params.device)
 
     #gpt_model = GPT2LMHeadModel.from_pretrained("./dialogue_model/")
     #gpt_model.to(params.device)
     #gpt_model.eval()
-    gpt_model = None
+    gpt_model = 'bleu'
 
     # Load data
     test_data = data_loader.load_data('test')
@@ -284,8 +283,6 @@ if __name__ == '__main__':
     test_data_iterator = data_loader.data_iterator(test_data, shuffle=False)
 
     params.tagger_model_dir = tagger_model_dir
-
-    logging.info("- done.")
 
     logging.info("Starting evaluation...")
     test_metrics = evaluate(model, gpt_model, test_data_iterator, params, 'Test', mark='Test', verbose=True)
