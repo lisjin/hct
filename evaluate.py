@@ -66,8 +66,8 @@ def tags_to_string(source, labels):
         output_tokens.remove('[CLS]')
     while '*' in output_tokens:
         output_tokens.remove('*')
-    
-    
+
+
     if len(output_tokens)==0:
        output_tokens.append("*")
     elif len(output_tokens) > 1 and output_tokens[-1]=="*":
@@ -94,7 +94,7 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
     loss_avg = utils.RunningAverage()
 
     source_tokens = []
-    references = [] 
+    references = []
 
     for _ in range(params.eval_steps):
         # fetch the next evaluation batch
@@ -103,26 +103,26 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
         #print("batch data:", batch_data)
         #print("batch action:", batch_action.size())
         #print("batch reference:", len(batch_ref))
-        loss = model((batch_data, batch_token_starts, batch_ref), gpt_model, token_type_ids=None, attention_mask=batch_masks, 
-            labels_action=batch_action, labels_start=batch_start, labels_end=batch_end)[0]
+        with torch.no_grad():
+            output = model((batch_data, batch_token_starts, batch_ref), gpt_model, token_type_ids=None, attention_mask=batch_masks,
+                labels_action=batch_action, labels_start=batch_start, labels_end=batch_end)
+        loss = output[0]
         loss_avg.update(loss.item())
-        
-        output = model((batch_data, batch_token_starts, batch_ref), gpt_model, token_type_ids=None, attention_mask=batch_masks)  # shape: (batch_size, max_len, num_labels)
-        
+
         source_tokens.extend(batch_data)
         references.extend(batch_ref)
         #print("len source:", len(source_tokens))
         #print("len references:", len(references))
 
-        batch_action_output = output[0]
+        batch_action_output = output[1]
         batch_action_output = batch_action_output.detach().cpu().numpy()
         batch_action = batch_action.to('cpu').numpy()
 
-        batch_start_output = output[1]
+        batch_start_output = output[2]
         batch_start_output = batch_start_output.detach().cpu().numpy()
         batch_start = batch_start.to('cpu').numpy()
 
-        batch_end_output = output[2]
+        batch_end_output = output[3]
         batch_end_output = batch_end_output.detach().cpu().numpy()
         batch_end = batch_end.to('cpu').numpy()
 
@@ -135,24 +135,24 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
         pred_end_tags.extend([indices for indices in batch_end_output])
         true_end_tags.extend([indices for indices in batch_end])
 
-    pred_tags, true_tags = convert_back_tags(pred_action_tags, pred_start_tags, pred_end_tags, 
+    pred_tags, true_tags = convert_back_tags(pred_action_tags, pred_start_tags, pred_end_tags,
         true_action_tags, true_start_tags, true_end_tags)
     source = []
     tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
 
     for i in range(len(source_tokens)):
         source.append(tokenizer.convert_ids_to_tokens(source_tokens[i].tolist()))
-    
+
     hypo = []
     for i in range(len(pred_tags)):
         #print("source:", source[i])
-        #print("pred_tags:", pred_tags[i]) 
+        #print("pred_tags:", pred_tags[i])
         #assert len(source[i])==len(pred_tags[i])
         src = source[i][:len(pred_tags[i])]
         pred = tags_to_string(src, pred_tags[i]).strip()
         hypo.append(pred.lower())
         #print("hypo:", pred.lower())
-    
+
     if mark == "Test":
         file_name = "/prediction_emnlp"+"_"+str(epoch)+"_.txt"
         pred_out = open(params.tagger_model_dir+file_name, "w")
@@ -168,7 +168,7 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
         pred_out.close()
 
     assert len(pred_tags) == len(true_tags)
-    
+
     for i in range(len(pred_tags)):
         assert len(pred_tags[i]) == len(true_tags[i])
 
@@ -217,18 +217,18 @@ def interAct(model, data_iterator, params, mark='Interactive', verbose=False):
 
     batch_data, batch_token_starts = next(data_iterator)
     batch_masks = batch_data.gt(0)
-        
+
     batch_output = model((batch_data, batch_token_starts), token_type_ids=None, attention_mask=batch_masks)[0]  # shape: (batch_size, max_len, num_labels)
-        
+
     batch_output = batch_output.detach().cpu().numpy()
 
     pred_tags.extend([[idx2tag.get(idx) for idx in indices] for indices in np.argmax(batch_output, axis=2)])
-    
+
     return(get_entities(pred_tags))
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    
+
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     tagger_model_dir = 'experiments/' + args.model
     # Load the parameters from json file
@@ -273,7 +273,7 @@ if __name__ == '__main__':
     #gpt_model = GPT2LMHeadModel.from_pretrained("./dialogue_model/")
     #gpt_model.to(params.device)
     #gpt_model.eval()
-    gpt_model = None 
+    gpt_model = None
 
     # Load data
     test_data = data_loader.load_data('test')
