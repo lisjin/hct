@@ -14,8 +14,9 @@ from torch.distributions import Categorical
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 cc = SmoothingFunction()
 
-from utils import lst2str, tags_to_string
+from utils import tags_to_string
 from multi_headed_additive_attn import MultiHeadedAttention
+from data_preprocess_en import utils as dutils
 
 # span classifier based on self-attention
 class SpanClassifier(nn.Module):
@@ -24,32 +25,31 @@ class SpanClassifier(nn.Module):
         self.layer_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
         self.span_st_attn = MultiHeadedAttention(1, hidden_dim, max_relative_positions=max_relative_position)
         self.span_ed_attn = MultiHeadedAttention(1, hidden_dim, max_relative_positions=max_relative_position)
-        self.comb_emb = nn.Linear(hidden_dim * 2, hidden_dim)
+        self.sp_emb = nn.Linear(hidden_dim, hidden_dim)
         self.dropout = dropout
         if max_relative_position > 0.0:
             print("Setting max_relative_position to {}".format(max_relative_position))
 
     def reset_parameters(self):
-        nn.init.normal_(self.comb_emb.weight, std=2e-2)
-        nn.init.constant_(self.comb_emb.bias, 0.)
+        nn.init.normal_(self.sp_emb.weight, std=2e-2)
+        nn.init.constant_(self.sp_emb.bias, 0.)
 
     def upd_hid(self, attn_w, hid):
         hidc = (hid.unsqueeze(1) * attn_w.unsqueeze(-1)).sum(2)
-        hidc = self.comb_emb(torch.cat((hid, hidc), -1))
-        hidc = F.dropout(F.relu(hidc, inplace=True), p=self.dropout, training=self.training)
+        hidc = self.sp_emb(hidc)
         return hidc
 
     def forward(self, hid, sp_width, max_sp_len, attention_mask):
         sts, eds, masks = [], [], []
         hid1, hid2 = hid, hid
         for i in range(max_sp_len):
-            mask = torch.logical_and(sp_width > 0, i < sp_width).float()
+            mask = (i < sp_width).float()
             masks.append(mask)
             mask = mask.unsqueeze(-1) * attention_mask.unsqueeze(1)
-            sts.append(self.span_st_attn(hid1, hid1, hid1, mask=mask, type="self")) # [batch, seq, seq]
-            hid1 = self.upd_hid(sts[-1], hid1)
-            eds.append(self.span_ed_attn(hid2, hid2, hid2, mask=mask, type="self")) # [batch, seq, seq]
-            hid2 = self.upd_hid(eds[-1], hid2)
+            sts.append(self.span_st_attn(hid, hid, hid1, mask=mask, type="self")) # [batch, seq, seq]
+            hid1 = self.upd_hid(sts[-1], hid)
+            eds.append(self.span_ed_attn(hid, hid, hid2, mask=mask, type="self")) # [batch, seq, seq]
+            hid2 = self.upd_hid(eds[-1], hid)
         return torch.stack(sts, -2), torch.stack(eds, -2), torch.stack(masks, -1)
 
 # dist: [batch, seq, seq]
@@ -94,8 +94,8 @@ def decode_into_string(source, label_action, label_start, label_end, label_mask)
                 st = 0
                 ed = 0
             else:
-                st = lst2str(label_start[idx])
-                ed = lst2str(label_end[idx])
+                st = dutils.ilst2str(label_start[idx])
+                ed = dutils.ilst2str(label_end[idx])
             labels.append(action_map[label_action[idx]]+"|"+str(st)+"#"+str(ed))
         else:
             labels.append('DELETE')

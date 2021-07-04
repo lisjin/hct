@@ -102,3 +102,7 @@ def merge_sps(lst):
                 par_i = -1
         lst[:] = [sp for sp in lst if sp[0] > -1]
     return lst
+
+
+def ilst2str(lst):
+    return ','.join([str(s) for s in lst])

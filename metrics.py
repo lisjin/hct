@@ -145,7 +145,7 @@ def f1_score(y_true, y_pred, average='macro', digits=2, suffix=False):
             y_true = [item for sublist in y_true for item in sublist]
         if any(isinstance(s, list) for s in y_pred):
             y_pred = [item for sublist in y_pred for item in sublist]
-            
+
         true_entities = set(y_true)
         pred_entities = set(y_pred)
 
@@ -161,7 +161,7 @@ def f1_score(y_true, y_pred, average='macro', digits=2, suffix=False):
 
     if average == 'macro':
         p = 0.0
-        r = 0.0 
+        r = 0.0
         score = 0.0
         for i in range(len(y_true)):
             true = y_true[i]
@@ -175,14 +175,12 @@ def f1_score(y_true, y_pred, average='macro', digits=2, suffix=False):
             pre = 100 * nb_correct / nb_pred if nb_pred > 0 else 0
             re = 100 * nb_correct / nb_true if nb_true > 0 else 0
             f = 2 * pre * re / (pre + re) if pre + re > 0 else 0
-            
+
             p += pre
             r += re
             score += f
-            
+
         return score/len(y_true)
-
-
 
 
 def accuracy_score(y_true, y_pred):

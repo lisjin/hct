@@ -18,11 +18,11 @@ class Metrics(object):
         :param candidates: 验证值, list of string
         :return:
         """
-	
+
         bleu1s = corpus_bleu([[r] for r in references], candidates, weights=(1.0, 0.0, 0.0, 0.0))
         bleu2s = corpus_bleu([[r] for r in references], candidates, weights=(0.5, 0.5, 0.0, 0.0))
         bleu3s = corpus_bleu([[r] for r in references], candidates, weights=(0.33, 0.33, 0.33, 0.0))
-        bleu4s = corpus_bleu([[r] for r in references], candidates, weights=(0.25, 0.25, 0.25, 0.25)) 
+        bleu4s = corpus_bleu([[r] for r in references], candidates, weights=(0.25, 0.25, 0.25, 0.25))
         print("Avg. BLEU(n):\t%.3f (1)\t%.3f (2)\t%.3f (3)\t%.3f (4)" % (bleu1s, bleu2s, bleu3s, bleu4s))
         return (bleu1s, bleu2s, bleu3s, bleu4s)
 
@@ -35,7 +35,7 @@ class Metrics(object):
                 match_cnt = match_cnt + 1
 
         em_score = match_cnt / (float)(total_cnt)
-        print("em_score: %.3f, match_cnt: %d, total_cnt: %d" % (em_score, match_cnt, total_cnt))
+        print("em_score: %d\tmatch_cnt: %d\ttotal_cnt: %d" % (em_score, match_cnt, total_cnt))
         return em_score
 
     @staticmethod
@@ -94,7 +94,7 @@ if __name__ == '__main__':
          for line in f:
              ref = line.strip().split("\t")[1]
              references.append(ref.lower())
-             
+
     candidates = []
     with open(path_hypo, "r")as f:
          for i, line in enumerate(f):

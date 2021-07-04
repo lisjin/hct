@@ -18,12 +18,7 @@ from metrics import f1_score, get_entities, classification_report, accuracy_scor
 from score import Metrics
 from sequence_tagger import BertForSequenceTagging
 from utils import tags_to_string
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='acl19', help="Directory containing the dataset")
-parser.add_argument('--model', default='acl19/w_bleu_rl_transfer_token_bugfix', help="Directory containing the trained model")
-parser.add_argument('--gpu', default='0', help="gpu device")
-parser.add_argument('--seed', type=int, default=23, help="random seed for initialization")
+from data_preprocess_en import utils as dutils
 
 
 def convert_back_tags(pred_action, pred_start, pred_end, true_action, true_start, true_end):
@@ -35,9 +30,9 @@ def convert_back_tags(pred_action, pred_start, pred_end, true_action, true_start
         for i in range(len(pred_action[j])):
             if true_action[j][i] == '-1':
                 continue
-            p_tag = pred_action[j][i]+"|"+utils.lst2str(pred_start[j][i])+"#"+utils.lst2str(pred_end[j][i])
+            p_tag = pred_action[j][i]+"|"+dutils.ilst2str(pred_start[j][i])+"#"+dutils.ilst2str(pred_end[j][i])
             p_tags.append(p_tag)
-            t_tag = true_action[j][i]+"|"+utils.lst2str(true_start[j][i])+"#"+utils.lst2str(true_end[j][i])
+            t_tag = true_action[j][i]+"|"+dutils.ilst2str(true_start[j][i])+"#"+dutils.ilst2str(true_end[j][i])
             t_tags.append(t_tag)
         pred_tags.append(p_tags)
         true_tags.append(t_tags)
@@ -48,7 +43,7 @@ def eval_to_cpu(out, inp):
     return out.detach().cpu().numpy(), inp.to('cpu').numpy()
 
 
-def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbose=False):
+def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbose=False, best_val_bleu=0.):
     """Evaluate the model on `steps` batches."""
     # set model to evaluation mode
     model.eval()
@@ -108,48 +103,49 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
         pred = tags_to_string(src, pred_tags[i]).strip()
         hypo.append(pred.lower())
 
-    if mark == "Test":
-        file_name = "/prediction_emnlp"+"_"+str(epoch)+"_.txt"
-        pred_out = open(params.tagger_model_dir+file_name, "w")
-        for i in range(len(hypo)):
-            pred_out.write(hypo[i]+"\n")
-        pred_out.close()
-
-    if mark == "Val":
-        file_name = "/prediction_acl"+"_"+str(epoch)+"_.txt"
-        pred_out = open(params.tagger_model_dir+file_name, "w")
-        for i in range(len(hypo)):
-            pred_out.write(hypo[i]+"\n")
-        pred_out.close()
-
     assert len(pred_tags) == len(true_tags)
 
     for i in range(len(pred_tags)):
         assert len(pred_tags[i]) == len(true_tags[i])
 
-    if mark == "Test":
-        logging.info("***********EMNLP Test************")
-
     # logging loss, f1 and report
     metrics = {}
     bleu1, bleu2, bleu3, bleu4 = Metrics.bleu_score(references, hypo)
+    if mark == "Test":
+        file_name = os.path.join(params.tagger_model_dir, f"pred_test_{epoch:02d}.txt")
+        with open(file_name, 'w') as pred_out:
+            pred_out.writelines([f'{hyp}\n' for hyp in hypo])
+    elif mark == "Val":
+        assert(best_val_bleu is not None)
+        if bleu4 - best_val_bleu > 2.5e-3:
+            ckpt_files = [x for x in os.listdir(params.tagger_model_dir) if\
+                    re.search(r'^\d+$', x)]
+            if len(ckpt_files) > 2:  # keep only most recent top-3
+                oldest = min(ckpt_files, key=os.path.getctime)
+                os.remove(os.path.join(params.tagger_model_dir, oldest))
+                os.remove(os.path.join(params.tagger_model_dir, f'pred_dev_{oldest}.txt'))
+            ckpt_dir = os.path.join(params.tagger_model_dir, f'{epoch:02d}')
+            os.mkdir(ckpt_dir)
+            model.save(ckpt_dir)
+            file_name = os.path.join(params.tagger_model_dir, f"pred_dev_{epoch:02d}.txt")
+            with open(file_name, "w") as pred_out:
+                pred_out.writelines([f'{hyp}\n' for hyp in hypo])
+            metrics['best_val_bleu'] = best_val_bleu
     em_score = Metrics.em_score(references, hypo)
     rouge1, rouge2, rougel = Metrics.rouge_score(references, hypo)
-    metrics['bleu1'] = bleu1*100.0
-    metrics['bleu2'] = bleu2*100.0
-    metrics['bleu3'] = bleu3*100.0
-    metrics['bleu4'] = bleu4*100.0
-    metrics['rouge1'] = rouge1*100.0
-    metrics['rouge2'] = rouge2*100.0
-    metrics['rouge-L'] = rougel*100.0
-    metrics['em_score'] = em_score*100.0
-    f1 = f1_score(true_tags, pred_tags)
+    metrics['bleu1'] = bleu1
+    metrics['bleu2'] = bleu2
+    metrics['bleu3'] = bleu3
+    metrics['bleu4'] = bleu4
+    metrics['rouge1'] = rouge1
+    metrics['rouge2'] = rouge2
+    metrics['rouge-L'] = rougel
+    metrics['em_score'] = em_score
+
     metrics['loss'] = loss_avg()
-    metrics['f1'] = f1
-    accuracy = accuracy_score(true_tags, pred_tags)
-    metrics['accuracy'] = accuracy
-    metrics_str = "; ".join("{}: {:05.2f}".format(k, v) for k, v in metrics.items())
-    logging.info("- {} metrics: ".format(mark) + metrics_str)
+    metrics['f1'] = f1_score(true_tags, pred_tags)
+    metrics['accuracy'] = accuracy_score(true_tags, pred_tags)
+    logging.info('\t'.join(f"{k}: {metrics[k]:.3f}" for k in ['loss', 'f1', 'accuracy']))
 
     if verbose:
         report = classification_report(true_tags, pred_tags)
@@ -157,39 +153,18 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
     return metrics
 
 
-def interAct(model, data_iterator, params, mark='Interactive', verbose=False):
-    """Evaluate the model on `steps` batches."""
-    # set model to evaluation mode
-    model.eval()
-
-    idx2tag = params.idx2tag
-
-    true_tags = []
-    pred_tags = []
-
-    # a running average object for loss
-    loss_avg = utils.RunningAverage()
-
-
-    batch_data, batch_token_starts = next(data_iterator)
-    batch_masks = batch_data.gt(0)
-
-    batch_output = model((batch_data, batch_token_starts), token_type_ids=None, attention_mask=batch_masks)[0]  # shape: (batch_size, max_len, num_labels)
-
-    batch_output = batch_output.detach().cpu().numpy()
-
-    pred_tags.extend([[idx2tag.get(idx) for idx in indices] for indices in np.argmax(batch_output, axis=2)])
-
-    return(get_entities(pred_tags))
-
-
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', default='acl19', help="Directory containing the dataset")
+    parser.add_argument('--model', default='acl19/w_bleu_rl_transfer_token_bugfix', help="Directory containing the trained model")
+    parser.add_argument('--gpu', default='0', help="gpu device")
+    parser.add_argument('--seed', type=int, default=23, help="random seed for initialization")
+    parser.add_argument('--restore_dir', default=None)
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-    tagger_model_dir = 'experiments/' + args.model
     # Load the parameters from json file
-    json_path = os.path.join(tagger_model_dir, 'params.json')
+    json_path = os.path.join(args.model, 'params.json')
     assert os.path.isfile(json_path), "No json configuration file found at {}".format(json_path)
     params = utils.Params(json_path)
 
@@ -204,16 +179,16 @@ if __name__ == '__main__':
     params.batch_size = 1
 
     # Set the logger
-    utils.set_logger(os.path.join(tagger_model_dir, 'evaluate.log'))
+    utils.set_logger(os.path.join(args.model, 'evaluate.log'))
 
     # Create the input data pipeline
     logging.info("Loading the dataset...")
 
     # Initialize the DataLoader
-    data_dir = 'data/' + args.dataset
+    data_dir = 'data_preprocess_en/' + args.dataset
 
-    if args.dataset in ["canard"]:
-        bert_class = 'bert-base-cased' # auto
+    if args.dataset in ["canard_out"]:
+        bert_class = 'bert-base-uncased' # auto
         # bert_class = 'pretrained_bert_models/bert-base-cased/' # manual
     elif args.dataset in ["emnlp19"]:
         bert_class = 'bert-base-chinese' # auto
@@ -224,13 +199,16 @@ if __name__ == '__main__':
     data_loader = DataLoader(data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1)
 
     # Load the model
-    model = BertForSequenceTagging.from_pretrained(tagger_model_dir)
+    if args.restore_dir is not None:
+        model = BertForSequenceTagging.from_pretrained(args.restore_dir)
+    else:
+        model = BertForSequenceTagging.from_pretrained(args.model)
     model.to(params.device)
 
     #gpt_model = GPT2LMHeadModel.from_pretrained("./dialogue_model/")
     #gpt_model.to(params.device)
     #gpt_model.eval()
-    gpt_model = None
+    gpt_model = 'bleu'
 
     # Load data
     test_data = data_loader.load_data('test')
@@ -240,9 +218,9 @@ if __name__ == '__main__':
     params.eval_steps = math.ceil(params.test_size / params.batch_size)
     test_data_iterator = data_loader.data_iterator(test_data, shuffle=False)
 
-    params.tagger_model_dir = tagger_model_dir
-
-    logging.info("- done.")
+    params.tagger_model_dir = args.model
 
     logging.info("Starting evaluation...")
-    test_metrics = evaluate(model, gpt_model, test_data_iterator, params, 'Test', mark='Test', verbose=True)
+    epoch = int(os.path.basename(os.path.normpath(args.restore_dir)))
+    test_metrics = evaluate(model, gpt_model, test_data_iterator, params, epoch,
+            mark='Test')

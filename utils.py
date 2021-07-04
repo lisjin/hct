@@ -146,16 +146,16 @@ def tags_to_string(source, labels):
         added_phrase = tag.split("|")[1]
         starts, ends = added_phrase.split("#")[0], added_phrase.split("#")[1]
         starts, ends = starts.split(','), ends.split(',')
-        stop_i = len(starts) - 1
+        stop_i = 0
         for i, start in enumerate(starts):
             s_i, e_i = int(start), int(ends[i])
-            if e_i >= s_i and e_i > 0 and s_i < stop_i:
+            if s_i == stop_i:
+                break
+            if e_i >= s_i and e_i > 0:
                 add_phrase = [s for s in source[s_i:e_i+1]]
                 if add_phrase:
                     add_phrase = " ".join(add_phrase)
                     output_tokens.append(add_phrase)
-            if s_i == stop_i:
-                break
         if tag.split("|")[0]=="KEEP":
             output_tokens.append(token)
 

@@ -1,5 +1,6 @@
+MODEL_DIR="experiments/canard21_2"
 python train.py \
         --dataset canard_out \
-        --model "experiments/canard21" \
-        --gpu 2 \
-        --bleu_rl
+        --model $MODEL_DIR \
+        --gpu 4 \
+        --bleu_rl \

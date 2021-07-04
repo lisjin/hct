@@ -9,6 +9,7 @@ from bert import tokenization
 import tagging
 import tagging_converter
 from typing import Mapping, MutableSequence, Optional, Sequence, Text
+from utils import ilst2str
 import utils_data as utils
 
 class BertExample(object):
@@ -74,16 +75,13 @@ class BertExampleBuilder(object):
     self._pad_id = self._get_pad_id()
     self._keep_tag_id = self._label_map['KEEP']
 
-  @staticmethod
-  def ilst2str(lst):
-    return ','.join([str(s) for s in lst])
-
   def build_bert_example(
       self,
       sources,
       target = None,
       use_arbitrary_target_ids_for_infeasible_examples = False,
-      phrs_new = None
+      phrs_new = None,
+      is_train = True,
   ):
     """Constructs a BERT Example.
 
@@ -151,7 +149,8 @@ class BertExampleBuilder(object):
               unfound_phrs.append(phrase)
             start.append(-1)
             end.append(-1)
-            can_convert = False
+            if is_train:
+              can_convert = False
         else:
           start.append(s_ind)
           end.append(s_ind+len(phrase)-1)
@@ -183,9 +182,9 @@ class BertExampleBuilder(object):
     labels=[]
     for i in range(len(labels_)):
       start_str = str(label_start[i]) if type(label_start[i]) is int\
-          else self.ilst2str(label_start[i])
+          else ilst2str(label_start[i])
       end_str = str(label_end[i]) if type(label_end[i]) is int\
-          else self.ilst2str(label_end[i])
+          else ilst2str(label_end[i])
       labels.append(f'{labels_[i]}|{start_str}#{end_str}')
     example = BertExample(
         input_tokens=task.source_tokens+["\t"]+target.split(),

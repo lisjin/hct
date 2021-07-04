@@ -1,5 +1,6 @@
+MODEL_DIR="experiments/canard21_2"
 python evaluate.py \
-        --dataset acl19 \
-        --mode acl19/w_gpt_rl_3e-5 \
-        --gpu 2 \
-
+        --dataset canard_out \
+        --model $MODEL_DIR \
+        --gpu 3 \
+        --restore_dir "$MODEL_DIR/8"

@@ -17,6 +17,13 @@ class Additive_Attention(nn.Module):
 
         self.softmax = nn.Softmax(dim=-1)
         #self.dropout = nn.Dropout(dropout)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.normal_(self.linear_concat.weight, std=.02)
+        nn.init.normal_(self.linear_logit.weight, std=.02)
+        nn.init.constant_(self.linear_concat.bias, 0.)
+        nn.init.constant_(self.linear_logit.bias, 0.)
 
     def forward(self, queries, keys, values, mask):
         """ Additive attention mechanism. This layer is implemented using a
@@ -126,6 +133,16 @@ class MultiHeadedAttention(nn.Module):
             vocab_size = max_relative_positions * 2 + 1
             self.relative_positions_embeddings = nn.Embedding(
                 vocab_size, self.dim_per_head)
+
+    def reset_parameters(self):
+        nn.init.normal_(self.linear_keys.weight, std=.02)
+        nn.init.normal_(self.linear_values.weight, std=.02)
+        nn.init.normal_(self.linear_query.weight, std=.02)
+        nn.init.normal_(self.final_linear.weight, std=.02)
+        nn.init.constant_(self.linear_keys.bias, 0.)
+        nn.init.constant_(self.linear_values.bias, 0.)
+        nn.init.constant_(self.linear_query.bias, 0.)
+        nn.init.constant_(self.final_linear.bias, 0.)
 
     def forward(self, key, value, query, mask=None, type=None):
         """

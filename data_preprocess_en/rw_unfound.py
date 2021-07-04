@@ -69,13 +69,15 @@ def proc_examples(args):
     converter = tagging_converter.TaggingConverter(
             tagging_converter.get_phrase_vocabulary_from_label_map(label_map))
     builder = bert_example.BertExampleBuilder(label_map, args.vocab_f, args.max_seq_length, args.do_lower_case, converter)
+    is_train = args.split == 'train'
     num_converted = 0
     tags, sens = [], []
     for i, (sources, target) in enumerate(yield_sources_and_targets(
         os.path.join(args.data_dir, f'{args.split}.tsv'), args.tsv_fmt)):
         example, ret = builder.build_bert_example(
                 sources, target,
-                phrs_new=phrs_add.get(i, []) if args.write else None)
+                phrs_new=phrs_add.get(i, []) if args.write else None,
+                is_train=is_train)
         if args.write:  # rewritten source sentence
             snts.append(ret)
             tgts.append(target)
