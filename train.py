@@ -1,18 +1,23 @@
 """Train and evaluate the model"""
+import argparse
+import logging
+import math
 import os
+import random
 import torch
 import utils
-import random
-import logging
-import argparse
 import torch.nn as nn
+
 from tqdm import trange
+from transformers.optimization import get_linear_schedule_with_warmup, AdamW
+from transformers.models.gpt2.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
+
 from evaluate import evaluate
 from data_loader import DataLoader
 from sequence_tagger import BertForSequenceTagging
-from transformers.optimization import get_linear_schedule_with_warmup, AdamW
-from transformers.models.gpt2.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
-import math
+
+import transformers
+transformers.logging.set_verbosity(transformers.logging.ERROR)
 
 
 def train_epoch(model, rl_model, data_iterator, optimizer, scheduler, params):
@@ -79,8 +84,9 @@ def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_
         # params.eval_steps = params.train_steps
         # train_metrics = evaluate(model, train_data_iterator, params, mark='Train') # callback train f1
         params.eval_steps = params.val_steps
-        val_metrics = evaluate(model, rl_model, val_data_iterator, params, epoch, mark='Val', best_val_bleu=best_val_bleu)
-        best_val_bleu = val_metrics['best_val_bleu']
+        val_metrics = evaluate(model, rl_model, val_data_iterator, params, epoch, mark='Val', best_val_bleu=best_val_bleu, optimizer=optimizer)
+        if 'best_val_bleu' in val_metrics:
+            best_val_bleu = val_metrics['best_val_bleu']
         params.eval_steps = params.test_steps
 
         # Early stopping and logging best f1
@@ -173,6 +179,9 @@ def main(args):
         optimizer_grouped_parameters = [{'params': [p for n, p in param_optimizer]}]
 
     optimizer = AdamW(optimizer_grouped_parameters, lr=params.learning_rate, correct_bias=False)
+    if args.restore_dir is not None:
+        osd = torch.load(os.path.join(args.restore_dir, 'optim.bin'))
+        optimizer.load_state_dict(osd)
     train_steps_per_epoch = math.ceil(params.train_size // params.batch_size)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=train_steps_per_epoch, num_training_steps=params.epoch_num * train_steps_per_epoch)
 

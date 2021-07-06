@@ -20,12 +20,11 @@ from data_preprocess_en import utils as dutils
 
 # span classifier based on self-attention
 class SpanClassifier(nn.Module):
-    def __init__(self, hidden_dim, max_relative_position, dropout=0.2):
+    def __init__(self, hidden_dim, max_relative_position, dropout=0.1):
         super(SpanClassifier, self).__init__()
-        self.layer_norm = nn.LayerNorm(hidden_dim, eps=1e-6)
         self.span_st_attn = MultiHeadedAttention(1, hidden_dim, max_relative_positions=max_relative_position)
         self.span_ed_attn = MultiHeadedAttention(1, hidden_dim, max_relative_positions=max_relative_position)
-        self.sp_emb = nn.Linear(hidden_dim, hidden_dim)
+        self.sp_emb = nn.Linear(2 * hidden_dim, hidden_dim)
         self.dropout = dropout
         if max_relative_position > 0.0:
             print("Setting max_relative_position to {}".format(max_relative_position))
@@ -34,23 +33,26 @@ class SpanClassifier(nn.Module):
         nn.init.normal_(self.sp_emb.weight, std=2e-2)
         nn.init.constant_(self.sp_emb.bias, 0.)
 
-    def upd_hid(self, attn_w, hid):
+    def upd_hid(self, attn_w, hid, hidp):
         hidc = (hid.unsqueeze(1) * attn_w.unsqueeze(-1)).sum(2)
-        hidc = self.sp_emb(hidc)
+        hidc = F.relu(self.sp_emb(torch.cat((hidp, hidc), 2)), inplace=True)
+        hidc = F.dropout(hidc, p=self.dropout, training=self.training)
         return hidc
 
     def forward(self, hid, sp_width, max_sp_len, attention_mask):
-        sts, eds, masks = [], [], []
+        attn_w0 = attention_mask / attention_mask.sum(1, keepdim=True)
+        attn_w0 = attn_w0.unsqueeze(1).expand(-1, hid.shape[1], -1)
+        sts, eds, masks = [attn_w0], [attn_w0], []
         hid1, hid2 = hid, hid
         for i in range(max_sp_len):
             mask = (i < sp_width).float()
             masks.append(mask)
             mask = mask.unsqueeze(-1) * attention_mask.unsqueeze(1)
+            hid1 = self.upd_hid(sts[-1], hid, hid1)
             sts.append(self.span_st_attn(hid, hid, hid1, mask=mask, type="self")) # [batch, seq, seq]
-            hid1 = self.upd_hid(sts[-1], hid)
+            hid2 = self.upd_hid(eds[-1], hid, hid2)
             eds.append(self.span_ed_attn(hid, hid, hid2, mask=mask, type="self")) # [batch, seq, seq]
-            hid2 = self.upd_hid(eds[-1], hid)
-        return torch.stack(sts, -2), torch.stack(eds, -2), torch.stack(masks, -1)
+        return torch.stack(sts[1:], -2), torch.stack(eds[1:], -2), torch.stack(masks, -1)
 
 # dist: [batch, seq, seq]
 # refs: [batch, seq, seq]
@@ -119,9 +121,8 @@ class BertForSequenceTagging(BertPreTrainedModel):
 
         self.init_weights()
 
-    def forward(self, input_data, rl_model, token_type_ids=None,
-            attention_mask=None, labels_action=None, labels_start=None,
-            labels_end=None, sp_width=None):
+    def forward(self, input_data, rl_model, attention_mask=None,
+            labels_action=None, labels_start=None, labels_end=None, sp_width=None):
         input_ids, input_token_starts, input_ref = input_data
         outputs = self.bert(input_ids, attention_mask=attention_mask)
         sequence_output = outputs[0]

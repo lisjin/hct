@@ -56,8 +56,8 @@ class Additive_Attention(nn.Module):
 
         queries = queries.unsqueeze(dim=3) #[bs, 1, len_q, 1, size]
         keys = keys.unsqueeze(dim=2) # [bs, 1, 1, len_k, size]
-        q = queries.repeat(1, 1, 1, length_kv, 1)
-        k = keys.repeat(1, 1, length_q, 1, 1)
+        q = queries.expand(-1, -1, -1, length_kv, -1)
+        k = keys.expand(-1, -1, length_q, -1, -1)
 
         combined = torch.tanh(self.linear_concat(torch.cat((q, k), dim=-1)))
 

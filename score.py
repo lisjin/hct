@@ -34,8 +34,8 @@ class Metrics(object):
             if ref.split() == cand.split():
                 match_cnt = match_cnt + 1
 
-        em_score = match_cnt / (float)(total_cnt)
-        print("em_score: %d\tmatch_cnt: %d\ttotal_cnt: %d" % (em_score, match_cnt, total_cnt))
+        em_score = match_cnt / float(total_cnt)
+        print(f'em_score: {em_score:.03f}\tmatch_cnt: {match_cnt}\ttotal_cnt: {total_cnt}')
         return em_score
 
     @staticmethod
@@ -79,7 +79,7 @@ class Metrics(object):
         rougel_average = sum(rougels) / len(rougels)
 
         # 输出
-        print("average rouges, rouge_1: %.3f, rouge_2: %.3f, rouge_l: %.3f" \
+        print("rouge_1: %.3f\trouge_2: %.3f\trouge_l: %.3f" \
               % (rouge1_average, rouge2_average, rougel_average))
         return (rouge1_average, rouge2_average, rougel_average)
 

@@ -2,12 +2,13 @@
 import argparse
 import logging
 import math
+import numpy as np
 import os
+import re
 import random
+import shutil
 import torch
 import utils
-
-import numpy as np
 
 from transformers.models.gpt2.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
 from transformers import BertTokenizer
@@ -43,7 +44,7 @@ def eval_to_cpu(out, inp):
     return out.detach().cpu().numpy(), inp.to('cpu').numpy()
 
 
-def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbose=False, best_val_bleu=0.):
+def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbose=False, best_val_bleu=0., optimizer=None):
     """Evaluate the model on `steps` batches."""
     # set model to evaluation mode
     model.eval()
@@ -112,25 +113,23 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
     metrics = {}
     bleu1, bleu2, bleu3, bleu4 = Metrics.bleu_score(references, hypo)
     if mark == "Test":
-        file_name = os.path.join(params.tagger_model_dir, f"pred_test_{epoch:02d}.txt")
+        file_name = os.path.join(args.restore_dir, f"pred_test_{epoch:02d}.txt")
         with open(file_name, 'w') as pred_out:
             pred_out.writelines([f'{hyp}\n' for hyp in hypo])
     elif mark == "Val":
-        assert(best_val_bleu is not None)
         if bleu4 - best_val_bleu > 2.5e-3:
-            ckpt_files = [x for x in os.listdir(params.tagger_model_dir) if\
-                    re.search(r'^\d+$', x)]
+            ckpt_files = [os.path.join(params.tagger_model_dir, x) for x in\
+                    os.listdir(params.tagger_model_dir) if re.search(r'^\d+$', x)]
             if len(ckpt_files) > 2:  # keep only most recent top-3
-                oldest = min(ckpt_files, key=os.path.getctime)
-                os.remove(os.path.join(params.tagger_model_dir, oldest))
-                os.remove(os.path.join(params.tagger_model_dir, f'pred_dev_{oldest}.txt'))
+                shutil.rmtree(min(ckpt_files, key=os.path.getctime))
             ckpt_dir = os.path.join(params.tagger_model_dir, f'{epoch:02d}')
             os.mkdir(ckpt_dir)
-            model.save(ckpt_dir)
-            file_name = os.path.join(params.tagger_model_dir, f"pred_dev_{epoch:02d}.txt")
+            model.save_pretrained(ckpt_dir)
+            torch.save(optimizer.state_dict(), os.path.join(ckpt_dir, 'optim.bin'))
+            file_name = os.path.join(ckpt_dir, f"pred_dev_{epoch:02d}.txt")
             with open(file_name, "w") as pred_out:
                 pred_out.writelines([f'{hyp}\n' for hyp in hypo])
-            metrics['best_val_bleu'] = best_val_bleu
+            metrics['best_val_bleu'] = bleu4
     em_score = Metrics.em_score(references, hypo)
     rouge1, rouge2, rougel = Metrics.rouge_score(references, hypo)
     metrics['bleu1'] = bleu1
@@ -159,7 +158,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', default='acl19/w_bleu_rl_transfer_token_bugfix', help="Directory containing the trained model")
     parser.add_argument('--gpu', default='0', help="gpu device")
     parser.add_argument('--seed', type=int, default=23, help="random seed for initialization")
-    parser.add_argument('--restore_dir', default=None)
+    parser.add_argument('--restore_dir', required=True)
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
@@ -199,10 +198,7 @@ if __name__ == '__main__':
     data_loader = DataLoader(data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1)
 
     # Load the model
-    if args.restore_dir is not None:
-        model = BertForSequenceTagging.from_pretrained(args.restore_dir)
-    else:
-        model = BertForSequenceTagging.from_pretrained(args.model)
+    model = BertForSequenceTagging.from_pretrained(args.restore_dir)
     model.to(params.device)
 
     #gpt_model = GPT2LMHeadModel.from_pretrained("./dialogue_model/")
