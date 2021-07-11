@@ -81,7 +81,7 @@ class BertExampleBuilder(object):
       target = None,
       use_arbitrary_target_ids_for_infeasible_examples = False,
       phrs_new = None,
-      is_train = True,
+      all_phr = False
   ):
     """Constructs a BERT Example.
 
@@ -121,7 +121,7 @@ class BertExampleBuilder(object):
     labels_ = []
     can_convert = True
     if phrs_new is None:
-      unfound_phrs = []
+      phrs_read = []
     else:
       i2 = 0
     for i, t in enumerate(tags):
@@ -146,14 +146,15 @@ class BertExampleBuilder(object):
             i2 += 1
           else:
             if phrs_new is None:
-              unfound_phrs.append(phrase)
+              phrs_read.append(phrase)
             start.append(-1)
             end.append(-1)
-            if is_train:
-              can_convert = False
+            can_convert = False
         else:
           start.append(s_ind)
           end.append(s_ind+len(phrase)-1)
+          if phrs_new is None and all_phr:
+            phrs_read.append(phrase)
       else:
         start.append(-1)
         end.append(-1)
@@ -196,7 +197,7 @@ class BertExampleBuilder(object):
         task=task,
         default_label=self._keep_tag_id)
     #example.pad_to_max_length(self._max_seq_length, self._pad_id)
-    ret = ' '.join(tagging_converter.tag_to_sequence(task.source_tokens, tags, multi_phr=True)[:-1]) if phrs_new is not None else unfound_phrs
+    ret = ' '.join(tagging_converter.tag_to_sequence(task.source_tokens, tags, multi_phr=True)[:-1]) if phrs_new is not None else phrs_read
     return example, ret
 
   def _get_pad_id(self):

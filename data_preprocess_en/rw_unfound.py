@@ -31,7 +31,7 @@ def get_phrs_add(args):
     for i, (k, v) in enumerate(unfound_phrs.items()):
         k = int(k)
         phrs_add[k] = []
-        for v2 in v['phr']:
+        for v2 in v:
             ctx_leaves = list(chain.from_iterable((cpts_uniq[c].leaves() + ['[SEP]'] for c in cids[i])))[:-1]
             phrs_add[k].append([])
             for t in merge_sps(ctx_sps[j]):
@@ -63,7 +63,7 @@ def proc_examples(args):
         snts = []
         tgts = []
     else:
-        unfound_dct = {}
+        read_dct = {}
 
     label_map = read_label_map(os.path.join(args.data_out_dir, 'label_map.txt'))
     converter = tagging_converter.TaggingConverter(
@@ -71,20 +71,22 @@ def proc_examples(args):
     builder = bert_example.BertExampleBuilder(label_map, args.vocab_f, args.max_seq_length, args.do_lower_case, converter)
     is_train = args.split == 'train'
     num_converted = 0
-    tags, sens = [], []
+    tags, sens, cnv_ids = [], [], []
     for i, (sources, target) in enumerate(yield_sources_and_targets(
         os.path.join(args.data_dir, f'{args.split}.tsv'), args.tsv_fmt)):
         example, ret = builder.build_bert_example(
                 sources, target,
                 phrs_new=phrs_add.get(i, []) if args.write else None,
-                is_train=is_train)
+                all_phr=args.all_phr)
         if args.write:  # rewritten source sentence
             snts.append(ret)
             tgts.append(target)
         elif ret:  # unfound_phrs
-            unfound_dct[i] = {'src': sources[0], 'tgt': target, 'phr': ret[:]}
-        if example is None or example.features["can_convert"]==False:
+            read_dct[i] = ret
+        if is_train and (example is None or example.features["can_convert"]==False):
             continue
+        elif is_train:
+            cnv_ids.append(i)
         tags.append(' '.join([str(s) for s in example.features['labels']]))
         sens.append(' '.join(example.features['input_tokens']).replace('[CI]', '|'))
         num_converted += 1
@@ -94,10 +96,13 @@ def proc_examples(args):
         write_lst(hyp_path, snts)
         write_lst(concat_path(args, 'tags.txt', data_out=True), tags)
         write_lst(concat_path(args, 'sentences.txt', data_out=True), sens)
+        with open(concat_path(args, 'cnv_ids.json'), 'w') as f:
+            json.dump(cnv_ids, f)
         compute_bleu(hyp_path, tgts, snts)
     else:
-        with open(concat_path(args, 'unfound_phrs.json'), 'w', encoding='utf8') as f:
-            json.dump(unfound_dct, f)
+        pref = 'all' if args.all_phr else 'unfound'
+        with open(concat_path(args, f'{pref}_phrs.json'), 'w', encoding='utf8') as f:
+            json.dump(read_dct, f)
 
 
 def main(args):
@@ -115,9 +120,10 @@ if __name__ == '__main__':
     ap.add_argument('--hyp_f', default='snts_{}_{}.txt')
     ap.add_argument('--vocab_f', default='uncased_L-12_H-768_A-12/vocab.txt')
     ap.add_argument('--tsv_fmt', default='wikisplit')
-    ap.add_argument('--n_proc', type=int, default=2 * os.cpu_count() // 3)
+    ap.add_argument('--n_proc', type=int, default=min(4, os.cpu_count()))
     ap.add_argument('--max_seq_length', type=int, default=128)
     ap.add_argument('--do_lower_case', default=False)
     ap.add_argument('--write', action='store_true')
+    ap.add_argument('--all_phr', action='store_true')
     args = ap.parse_args()
     main(args)

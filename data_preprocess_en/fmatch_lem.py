@@ -235,7 +235,7 @@ if __name__ == '__main__':
     ap.add_argument('--mmode', default='difflib', choices=['regex', 'difflib'])
     ap.add_argument('--tmode', default='bup', choices=['tdown', 'bup'])
     ap.add_argument('--stop_phrs_f', default='canard/stop_phrs.txt')
-    ap.add_argument('--n_proc', type=int, default=2 * cpu_count() // 3)
+    ap.add_argument('--n_proc', type=int, default=min(4, cpu_count()))
     ap.add_argument('--debug', action='store_true')
     ap.add_argument('--print_found', action='store_true')
     ap.add_argument('--out_f', default='sps_{}_{}.json')

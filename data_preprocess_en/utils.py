@@ -106,3 +106,33 @@ def merge_sps(lst):
 
 def ilst2str(lst):
     return ','.join([str(s) for s in lst])
+
+
+def find_subspans(t, i, k, en, li, sps):
+    if i == li and i + k <= en:
+        sps.append((i, k))
+        li += k
+    elif i + k > li:
+        i2 = i
+        for st in t:
+            k2 = len(st.leaves()) if type(st) is Tree else 1
+            li = find_subspans(st, i2, k2, en, li, sps)
+            i2 += k2
+            if i2 >= en or li >= en:
+                break
+    return li
+
+
+def align_phr_tgt(phr_lst, target):
+    phr_spls = [phr.split() for phr in phr_lst]
+    tgt_spl = target.split()
+    sps = []
+    for ps in phr_spls:
+        pl = len(ps)
+        sp = (-1, -1)
+        for i in range(len(tgt_spl)):
+            if tgt_spl[i:i+pl] == ps:
+                sp = (i, pl)
+                break
+        sps.append(sp)
+    return sps

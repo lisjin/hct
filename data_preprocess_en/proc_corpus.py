@@ -93,6 +93,6 @@ if __name__ == '__main__':
     ap.add_argument('--use_context', action='store_true')
     ap.add_argument('--inp_dir', default='canard')
     ap.add_argument('--splits', default=('train', 'dev', 'test'))
-    ap.add_argument('--n_proc', type=int, default=2 * os.cpu_count() // 3)
+    ap.add_argument('--n_proc', type=int, default=min(4, os.cpu_count()))
     args = ap.parse_args()
     main(args)

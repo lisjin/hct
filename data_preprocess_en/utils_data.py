@@ -92,6 +92,12 @@ def yield_sources_and_targets(
     yield sources, target
 
 
+def filter_sources_and_targets(input_file, keys):
+  for i, (sources, target) in enumerate(_yield_wikisplit_examples(input_file)):
+    if i in keys:
+      yield i, sources[0], target
+
+
 def _yield_wikisplit_examples(
     input_file):
   # The Wikisplit format expects a TSV file with the source on the first and the

@@ -1,7 +1,6 @@
 """Data loader"""
 import os
 import torch
-import utils
 import random
 import numpy as np
 
