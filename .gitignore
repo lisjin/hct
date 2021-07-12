@@ -2,6 +2,7 @@
 *.bin
 *.json
 *.log
+*.png
 *.props
 *.tar.gz
 *.tsv

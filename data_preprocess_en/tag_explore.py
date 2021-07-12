@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import numpy as np
 import os
 
 from collections import Counter
@@ -58,29 +59,48 @@ def iter_pt(pts, pi, pi_max, pl, li, sps):
         k = len(pt.leaves())
         pl2 = min(k, pl)
         _ = find_subspans(pt, 0, k, pl2, li, sps)
-        mv_pt = pl >= k
+        mv_pt = pl > k
         pl -= (pl2 - li)
         if mv_pt:
             pi += 1
             li = 0
         else:
             li = pl
-    return pi, li
 
 
-def get_tag_sps(pts, tag, sps):
-    offset, en, li, n = 0, 0, 0, len(tag)
+def iter_pts(pts, pi, pi_max, pl, li, sps, pl_tot, hist):
+    sps_n = 0
+    while pl > 0:
+        pl2 = min(len(pts[pi].leaves()), pl)
+        sps_n = len(sps)
+        iter_pt(pts, pi, pi_max, pl2, li, sps)
+        hist[len(sps) - sps_n] += 1
+        pl_tot += pl2
+        pl -= pl2 + 1
+        pi += 1
+    return pl_tot
+
+
+def check_sps(sps, pl_tot):
+    if sps:
+        spl_tot = sum(t[1] for t in sps)
+        assert(spl_tot == pl_tot)
+
+
+def get_tag_sps(pts, tag, sps, hist, src_n):
+    offset, en, li, pl_tot, n = len(tag) - src_n, 0, 0, 0, len(tag)
     pi, pi_max = 0, len(pts)
     sps.clear()
     while offset < n:
         while en < n and tag[en] == tag[offset]:
             en += 1
         pl = en - offset
-        pi, li = iter_pt(pts, pi, pi_max, pl, li, sps)
+        pl_tot = iter_pts(pts, pi, pi_max, pl, li, sps, pl_tot, hist)
         offset = en
+    check_sps(sps, pl_tot)
 
 
-def get_se_sps(pts, st_en, sps):
+def get_se_sps(pts, st_en, sps, hist):
     lptr, li, pl_tot = 0, 0, 0
     pi, pi_max = 0, len(pts)
     sps.clear()
@@ -96,45 +116,26 @@ def get_se_sps(pts, st_en, sps):
                         break
                     lptr += k + 1  # account for delimiter token
                     pi += 1
-                pl = e2 - s2
-                pi2, _ = iter_pt(pts, pi, pi_max, pl, li, sps)
-                pl_tot += pl
-    if sps:
-        spl_tot = sum(t[1] for t in sps)
-        assert(spl_tot == pl_tot or pl_tot > spl_tot)
+                pl = e2 - s2 + 1
+                pl_tot = iter_pts(pts, pi, pi_max, pl, li, sps, pl_tot, hist)
+    check_sps(sps, pl_tot)
 
 
-def print_hist(hist):
+def print_hist(hist, fmt_str='{:d}'):
     print('# sps\tfreq')
     for k in sorted(hist.keys()):
-        print(k, hist[k], sep='\t')
+        print(fmt_str.format(k), hist[k], sep='\t')
 
 
 def main(args):
     cpts_uniq, cids, cpts_src, tags, st_ens = read_fs(args)
     hist_tag, hist_se = Counter(), Counter()
     sps_tag, sps_se = [], []
-    for i2, (cid, pt_src, tag, st_en) in enumerate(zip(cids, cpts_src, tags, st_ens)):
-        pts_ctx = [cpts_uniq[c] for c in cid]
-        pts_inp = pts_ctx[:] + [pt_src]
-        dlm_is = set()  # delimiter ([SEP], [CI]) indices to ignore
-        if len(pts_inp) > 1:
-            j = 0
-            for pt in pts_inp[:-1]:
-                j += len(pt.leaves()) + 1
-                dlm_is.add(j)
+    for cid, pt_src, tag, st_en in zip(cids, cpts_src, tags, st_ens):
+        pts_ctx = [cpts_uniq[c] for c in cid] + [pt_src]
 
-        # Ignore last '*' character in tag
-        tag[:] = [t for j, t in enumerate(tag[:-1]) if j not in dlm_is]
-        tot_l = sum(len(pt.leaves()) for pt in pts_inp)
-        assert(tot_l == len(tag))
-
-        get_tag_sps(pts_inp, tag, sps_tag)
-        assert(sum(t[1] for t in sps_tag) == tot_l)
-        hist_tag[len(sps_tag)] += 1
-
-        get_se_sps(pts_ctx, st_en, sps_se)
-        hist_se[len(sps_se)] += 1
+        get_tag_sps(pts_ctx, tag, sps_tag, hist_tag, len(pt_src.leaves()))
+        get_se_sps(pts_ctx, st_en, sps_se, hist_se)
     print_hist(hist_tag)
     print_hist(hist_se)
 
