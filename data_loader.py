@@ -31,28 +31,30 @@ class DataLoader(object):
     def load_tags(self):
         return ["KEEP", "DELETE"]
 
-    def _split_to_wordpieces_span(self, tokens, label_action, label_start, label_lens, label_end, seq_width):
-
+    def _split_to_wordpieces_span(self, tokens, label_action, label_start, seq_width, label_end):
         bert_tokens = []
         bert_label_action = []
         bert_label_start = []
         bert_label_end = []
         bert_seq_width = []
-        token_start_indices = []
+        source_indices = []
 
         cum_num_list = []
         curr_len_list = []
         cum_num = 0
+        src_start = len(tokens)
+        orig_start = len(tokens)
         for i, token in enumerate(tokens):
-            token_start_indices.append(len(bert_tokens) + 1)
-            if token == "[SEP]":
-                pieces = ['[SEP]']
+            if token == '[SEP]':
+                pieces = [token]
             else:
                 pieces = self.tokenizer.tokenize(token)
+                if token == '|':
+                    src_start = len(bert_tokens) + 1
+                    orig_start = i + 1
 
-            bert_tokens.extend(pieces)
             bert_label_action.extend([label_action[i]] * len(pieces))
-            bert_seq_width.extend([seq_width[i]] * len(pieces))
+            bert_tokens.extend(pieces)
 
             # bugfix for tokenizer influence on label start and label end
             # do you know johnson jackson | yes I know him - > yes I know johnson
@@ -66,19 +68,47 @@ class DataLoader(object):
             cum_num_list.append(cum_num)
             cum_num += len(pieces)-1
 
-        i2, rem = -1, 0
-        for i in range(len(label_start)):
-            if rem == 0:
-                i2 += 1
-                rem = label_lens[i2]
-            st = label_start[i]
-            ed = label_end[i]
-            zeros = [0] * (curr_len_list[i2] - 1)
-            bert_label_start.extend([(st+cum_num_list[st] if st < len(cum_num_list) else st)] + zeros)
-            bert_label_end.extend([(ed+cum_num_list[ed]+curr_len_list[ed]-1 if ed < len(cum_num_list) else ed)] + zeros)
-            rem -= 1
+        if len(bert_tokens) > self.max_len:
+            new_len = self.max_len - (len(bert_tokens) - src_start)
+            source_indices = list(range(new_len, self.max_len))
+            bert_tokens = bert_tokens[:new_len] + bert_tokens[src_start:]
+        else:
+            new_len = src_start
+            source_indices = list(range(src_start, len(bert_tokens)))
 
-        return bert_tokens, bert_label_action, bert_label_start, bert_label_end, bert_seq_width, token_start_indices
+        cur_label_start, cur_label_end = [], []
+        target_width = sum(seq_width[:orig_start - 1])
+        ptr = orig_start
+        rem = sw = seq_width[ptr]
+        for i in range(target_width, len(label_start)):
+            if rem == 0:
+                bert_seq_width.extend([sw] * curr_len_list[ptr])
+                for tup in list(zip(*cur_label_start)):
+                    bert_label_start.append(tup)
+                for tup in list(zip(*cur_label_end)):
+                    bert_label_end.append(tup)
+                cur_label_start.clear()
+                cur_label_end.clear()
+                ptr += 1
+                if ptr == len(seq_width):
+                    break
+                rem = sw = seq_width[ptr]
+            st, ed = label_start[i], label_end[i]
+            start = st + cum_num_list[st] if st < len(cum_num_list) else st
+            end = ed + cum_num_list[ed] + curr_len_list[ed] - 1 if ed < len(cum_num_list) else ed
+            if start >= new_len or end >= new_len:
+                sw -= 1
+                if sw == 0:
+                    sw = 1
+                    zeros = [0] * curr_len_list[ptr]
+                    cur_label_start.append(zeros)
+                    cur_label_end.append(zeros)
+            else:
+                zeros = [0] * (curr_len_list[ptr] - 1)
+                cur_label_start.append([start] + zeros)
+                cur_label_end.append([end] + zeros)
+            rem -= 1
+        return bert_tokens, bert_label_action[src_start:], bert_label_start, bert_label_end, bert_seq_width, source_indices
 
     def _split_multi_span(self, seq):
         sid = 0
@@ -87,7 +117,10 @@ class DataLoader(object):
         for si, i in enumerate(seq):
             if ',' in i:
                 slst = list(map(self.to_int, i.split(',')))
-                slst = slst[:self.max_sp_len] + [sid] * int(len(slst) < self.max_sp_len)
+                if len(slst) < self.max_sp_len - 1:
+                    slst = slst[:self.max_sp_len-1] + [sid]
+                else:
+                    slst = slst[:self.max_sp_len]
                 seq_out.extend(slst)
                 seq_width.append(len(slst))
             else:
@@ -108,25 +141,26 @@ class DataLoader(object):
         action_seq = [k.split("|")[0] for k in seq]
         start_seq = [k.split("|")[1].split("#")[0] for k in seq]
         end_seq = [k.split("|")[1].split("#")[1] for k in seq]
+        action_seq = ['DELETE'] + action_seq
         action_seq = [self.tag2idx.get(tag) for tag in action_seq]
         tokens = ['[CLS]'] + tokens
-        action_seq = [self.tag2idx.get('DELETE')] + action_seq
         start_seq, seq_width = self._split_multi_span(start_seq)
         end_seq, _ = self._split_multi_span(end_seq)
-        bert_tokens, bert_label_action, bert_label_start, bert_label_end, bert_seq_width, token_start_idxs = self._split_to_wordpieces_span(tokens, action_seq, start_seq, seq_width, end_seq, seq_width)
-        sentence = (self.tokenizer.convert_tokens_to_ids(bert_tokens), token_start_idxs)
-        return sentence, bert_label_action, bert_label_start, bert_seq_width, bert_label_end, tgt
+        bert_tokens, bert_label_action, bert_label_start, bert_label_end, bert_seq_width, src_indices = self._split_to_wordpieces_span(tokens, action_seq, start_seq, seq_width, end_seq)
+        sentence = self.tokenizer.convert_tokens_to_ids(bert_tokens)
+        return sentence, bert_label_action, bert_label_start, bert_seq_width, bert_label_end, tgt, src_indices
 
     def load_sentences_tags(self, sentences_file, tags_file, d, n_proc=4):
         """Loads sentences and tags from their corresponding files.
-            Maps tokens and tags to their indices and stores them in the provided dict d.
+        Maps tokens and tags to their indices and stores them in the provided dict d.
         """
         with open(sentences_file, 'r') as file1:
             with open(tags_file, 'r') as file2:
                 inp = list(zip(file1.readlines(), file2.readlines()))
         with Pool(n_proc) as p:
             out = p.map(self.get_sens_tags, inp)
-        d['data'], d['action'], d['start'], d['sp_width'], d['end'], d['ref'] = zip(*out)
+        #out = [self.get_sens_tags(x) for x in inp[:100]]
+        d['data'], d['action'], d['start'], d['sp_width'], d['end'], d['ref'], d['src_idx'] = zip(*out)
         d['size'] = len(d['data'])
         assert len(d['data']) == len(d['action'])
 
@@ -160,18 +194,16 @@ class DataLoader(object):
         return batch_tags
 
     @staticmethod
-    def copy_data_3d(batch_len, max_subwords_len, tags, pad, sp_width, max_sp_len):
+    def copy_data_3d(batch_len, max_subwords_len, tags, pad, max_sp_len):
         batch_tags = np.full((batch_len, max_subwords_len, max_sp_len), pad)
         for j in range(batch_len):
-            k2, rem = -1, 0
             tlen = min(len(tags[j]), max_subwords_len)
             for k in range(tlen):
-                if rem == 0:
-                    k2 += 1
-                    rem = sp_width[j][k2]
-                    batch_tags[j][k2][:rem] = tags[j][k:k+rem]
-                rem -= 1
+                batch_tags[j][k][:len(tags[j][k])] = tags[j][k]
         return batch_tags
+
+    def to_device(self, data, dtype=torch.long):
+        return torch.tensor(data, dtype=dtype).to(self.device)
 
     def data_iterator(self, data, shuffle=False):
         """Returns a generator that yields batches data with tags.
@@ -203,7 +235,7 @@ class DataLoader(object):
         for i in range(BATCH_NUM):
             # fetch sentences and tags
             batch_max_sp_len = 0
-            sentences, ref, action, start, end, sp_width = [], [], [], [], [], []
+            sentences, ref, action, start, end, sp_width, src_idx = [], [], [], [], [], [], []
             for idx in order[bis[i]:bis[i + 1]]:
                 sentences.append(data['data'][idx])
                 ref.append(data['ref'][idx])
@@ -211,41 +243,29 @@ class DataLoader(object):
                 start.append(data['start'][idx])
                 end.append(data['end'][idx])
                 sp_width.append(data['sp_width'][idx])
+                src_idx.append(data['src_idx'][idx])
                 batch_max_sp_len = max(max(sp_width[-1]), batch_max_sp_len)
 
-            # batch length
             batch_len = len(sentences)
 
-            # compute length of longest sentence in batch
-            batch_max_subwords_len = max([len(s[0]) for s in sentences])
+            batch_max_subwords_len = max([len(s) for s in sentences])
             max_subwords_len = min(batch_max_subwords_len, self.max_len)
+            max_src_len = min(max(len(s) for s in src_idx), self.max_len)
 
-            # prepare a numpy array with the data, initialising the data with pad_idx
             batch_data = self.token_pad_idx * np.ones((batch_len, max_subwords_len))
-            batch_token_starts = []
-
             # copy the data to the numpy array
             for j in range(batch_len):
-                cur_subwords_len = len(sentences[j][0])
+                cur_subwords_len = len(sentences[j])
                 if cur_subwords_len <= max_subwords_len:
-                    batch_data[j][:cur_subwords_len] = sentences[j][0]
+                    batch_data[j][:cur_subwords_len] = sentences[j]
                 else:
-                    batch_data[j] = sentences[j][0][:max_subwords_len]
-                token_start_idx = sentences[j][-1]
-                token_starts = np.zeros(max_subwords_len)
-                token_starts[[idx for idx in token_start_idx if idx < max_subwords_len]] = 1
-                batch_token_starts.append(token_starts)
+                    batch_data[j] = sentences[j][:max_subwords_len]
 
-            batch_action = self.copy_data(batch_len, max_subwords_len, action, self.tag_pad_idx)
-            batch_start = self.copy_data_3d(batch_len, max_subwords_len, start, 0, sp_width, batch_max_sp_len)
-            batch_end = self.copy_data_3d(batch_len, max_subwords_len, end, 0, sp_width, batch_max_sp_len)
-            batch_sp_width = self.copy_data(batch_len, max_subwords_len, sp_width, 0)
+            batch_action = self.to_device(self.copy_data(batch_len, max_src_len, action, self.tag_pad_idx))
+            batch_start = self.to_device(self.copy_data_3d(batch_len, max_src_len, start, 0, batch_max_sp_len))
+            batch_end = self.to_device(self.copy_data_3d(batch_len, max_src_len, end, 0, batch_max_sp_len))
+            batch_sp_width = self.to_device(self.copy_data(batch_len, max_src_len, sp_width, 0), dtype=torch.int)
+            batch_src_idx = self.to_device(self.copy_data(batch_len, max_src_len, src_idx, self.token_pad_idx))
 
-            # since all data are indices, we convert them to torch LongTensors
-            batch_data = torch.tensor(batch_data, dtype=torch.long).to(self.device)
-            batch_token_starts = torch.tensor(batch_token_starts, dtype=torch.long).to(self.device)
-            batch_action = torch.tensor(batch_action, dtype=torch.long).to(self.device)
-            batch_start = torch.tensor(batch_start, dtype=torch.long).to(self.device)
-            batch_end = torch.tensor(batch_end, dtype=torch.long).to(self.device)
-            batch_sp_width = torch.tensor(batch_sp_width, dtype=torch.long).to(self.device)
-            yield batch_data, batch_token_starts, ref, batch_action, batch_start, batch_end, batch_sp_width
+            batch_data = self.to_device(batch_data)
+            yield batch_data, ref, batch_action, batch_start, batch_end, batch_sp_width, batch_src_idx

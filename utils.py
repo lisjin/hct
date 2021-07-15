@@ -140,8 +140,10 @@ def convert_tokens_to_string(tokens):
     return out_string
 
 
-def tags_to_string(source, labels):
+def tags_to_string(source, labels, context=None):
     output_tokens = []
+    if context is None:
+        context = source
     for token, tag in zip(source, labels):
         added_phrase = tag.split("|")[1]
         starts, ends = added_phrase.split("#")[0], added_phrase.split("#")[1]
@@ -152,7 +154,7 @@ def tags_to_string(source, labels):
             if s_i == stop_i:
                 break
             if e_i >= s_i and e_i > 0:
-                add_phrase = [s for s in source[s_i:e_i+1]]
+                add_phrase = [s for s in context[s_i:e_i+1]]
                 if add_phrase:
                     add_phrase = " ".join(add_phrase)
                     output_tokens.append(add_phrase)

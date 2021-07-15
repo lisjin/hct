@@ -32,12 +32,12 @@ def train_epoch(model, rl_model, data_iterator, optimizer, scheduler, params):
     one_epoch = trange(params.train_steps)
     for batch in one_epoch:
         # fetch the next training batch
-        batch_data, batch_token_starts, batch_ref, batch_action, batch_start, batch_end, batch_sp_width = next(data_iterator)
+        batch_data, batch_ref, batch_action, batch_start, batch_end, batch_sp_width, batch_src_idx = next(data_iterator)
         batch_masks = batch_data.gt(0) # get padding mask
 
         # compute model output and loss
-        loss = model((batch_data, batch_token_starts, batch_ref), rl_model, attention_mask=batch_masks,
-            labels_action=batch_action, labels_start=batch_start, labels_end=batch_end, sp_width=batch_sp_width)[0]
+        loss = model((batch_data, batch_ref), rl_model, attention_mask=batch_masks,
+            labels_action=batch_action, labels_start=batch_start, labels_end=batch_end, sp_width=batch_sp_width, src_idx=batch_src_idx)[0]
 
         # clear previous gradients, compute gradients of all variables wrt loss
         model.zero_grad()
@@ -55,12 +55,12 @@ def train_epoch(model, rl_model, data_iterator, optimizer, scheduler, params):
         one_epoch.set_postfix(loss='{:05.3f}'.format(loss_avg()))
 
 
-def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, model_dir):
+def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, model_dir, cur_epoch):
     """Train the model and evaluate every epoch."""
     best_val_bleu = 0.0
     patience_counter = 0
 
-    for epoch in range(1, params.epoch_num + 1):
+    for epoch in range(cur_epoch, params.epoch_num + 1):
         # Run one epoch
         logging.info("Epoch {}/{}".format(epoch, params.epoch_num))
 
@@ -87,11 +87,14 @@ def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_
         val_metrics = evaluate(model, rl_model, val_data_iterator, params, epoch, mark='Val', best_val_bleu=best_val_bleu, optimizer=optimizer)
         if 'best_val_bleu' in val_metrics:
             best_val_bleu = val_metrics['best_val_bleu']
+            patience_counter = 0
+        else:
+            patience_counter += 1
         params.eval_steps = params.test_steps
 
-        # Early stopping and logging best f1
+        # Early stopping and logging best BLEU
         if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
-            logging.info("Best val EM score: {:05.2f}".format(best_val_f1))
+            logging.info("Best val BLEU: {:05.2f}".format(best_val_bleu))
             break
 
 
@@ -114,7 +117,6 @@ def main(args):
 
     # Set the logger
     utils.set_logger(os.path.join(args.model, 'train.log'))
-    logging.info(f'Using {params.device}')
 
     # Create the input data pipeline
 
@@ -179,16 +181,18 @@ def main(args):
         optimizer_grouped_parameters = [{'params': [p for n, p in param_optimizer]}]
 
     optimizer = AdamW(optimizer_grouped_parameters, lr=params.learning_rate, correct_bias=False)
+    cur_epoch = 1
     if args.restore_dir is not None:
         osd = torch.load(os.path.join(args.restore_dir, 'optim.bin'))
         optimizer.load_state_dict(osd)
+        cur_epoch = int(os.path.basename(os.path.normpath(args.restore_dir))) + 1
     train_steps_per_epoch = math.ceil(params.train_size // params.batch_size)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=train_steps_per_epoch, num_training_steps=params.epoch_num * train_steps_per_epoch)
 
     params.tagger_model_dir = args.model
     # Train and evaluate the model
     logging.info("Starting training for {} epoch(s)".format(params.epoch_num))
-    train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, args.model)
+    train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, args.model, cur_epoch)
 
 
 if __name__ == '__main__':

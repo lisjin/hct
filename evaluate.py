@@ -64,19 +64,21 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
     loss_avg = utils.RunningAverage()
 
     source_tokens = []
+    source_tokens2 = []
     references = []
 
     for _ in range(params.eval_steps):
         # fetch the next evaluation batch
-        batch_data, batch_token_starts, batch_ref, batch_action, batch_start, batch_end, batch_sp_width = next(data_iterator)
+        batch_data, batch_ref, batch_action, batch_start, batch_end, batch_sp_width, batch_src_idx = next(data_iterator)
         batch_masks = batch_data.gt(0)
         with torch.no_grad():
-            output = model((batch_data, batch_token_starts, batch_ref), gpt_model, attention_mask=batch_masks,
-                labels_action=batch_action, labels_start=batch_start, labels_end=batch_end, sp_width=batch_sp_width)
+            output = model((batch_data, batch_ref), gpt_model, attention_mask=batch_masks,
+                labels_action=batch_action, labels_start=batch_start, labels_end=batch_end, sp_width=batch_sp_width, src_idx=batch_src_idx)
         loss = output[0]
         loss_avg.update(loss.item())
 
         source_tokens.extend(batch_data)
+        source_tokens2.extend(batch_src_idx)
         references.extend(batch_ref)
 
         batch_action_output, batch_action = eval_to_cpu(output[1], batch_action)
@@ -94,14 +96,16 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
 
     pred_tags, true_tags = convert_back_tags(pred_action_tags, pred_start_tags, pred_end_tags,
         true_action_tags, true_start_tags, true_end_tags)
-    source = []
+    source, source2 = [], []
     for i in range(len(source_tokens)):
         source.append(model.tokenizer.convert_ids_to_tokens(source_tokens[i].tolist()))
+        source2.append([source[-1][x] for x in source_tokens2[i]])
 
     hypo = []
     for i in range(len(pred_tags)):
-        src = source[i][:len(pred_tags[i])]
-        pred = tags_to_string(src, pred_tags[i]).strip()
+        src = source[i][:params.max_len]
+        src2 = source2[i][:len(pred_tags[i])]
+        pred = tags_to_string(src2, pred_tags[i], context=src).strip()
         hypo.append(pred.lower())
 
     assert len(pred_tags) == len(true_tags)
@@ -117,7 +121,7 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
         with open(file_name, 'w') as pred_out:
             pred_out.writelines([f'{hyp}\n' for hyp in hypo])
     elif mark == "Val":
-        if bleu4 - best_val_bleu > 2.5e-3:
+        if bleu4 > best_val_bleu:
             ckpt_files = [os.path.join(params.tagger_model_dir, x) for x in\
                     os.listdir(params.tagger_model_dir) if re.search(r'^\d+$', x)]
             if len(ckpt_files) > 2:  # keep only most recent top-3

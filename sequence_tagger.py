@@ -39,19 +39,19 @@ class SpanClassifier(nn.Module):
         hidc = F.dropout(hidc, p=self.dropout, training=self.training)
         return hidc
 
-    def forward(self, hid, sp_width, max_sp_len, attention_mask):
-        attn_w0 = attention_mask / attention_mask.sum(1, keepdim=True)
-        attn_w0 = attn_w0.unsqueeze(1).expand(-1, hid.shape[1], -1)
+    def forward(self, hid, sp_width, max_sp_len, attention_mask, src_hid, src_mask):
+        amask = torch.logical_and(src_mask.unsqueeze(2), attention_mask.unsqueeze(1)).float()
+        attn_w0 = amask / torch.clamp(amask.sum(2, keepdim=True), min=1e-6)
         sts, eds, masks = [attn_w0], [attn_w0], []
-        hid1, hid2 = hid, hid
+        hid1, hid2 = src_hid, src_hid
         for i in range(max_sp_len):
             mask = (i < sp_width).float()
             masks.append(mask)
-            mask = mask.unsqueeze(-1) * attention_mask.unsqueeze(1)
+            mask = mask.unsqueeze(-1) * amask
             hid1 = self.upd_hid(sts[-1], hid, hid1)
-            sts.append(self.span_st_attn(hid, hid, hid1, mask=mask, type="self")) # [batch, seq, seq]
+            sts.append(self.span_st_attn(hid, hid, hid1, mask=mask)) # [batch, seq, seq]
             hid2 = self.upd_hid(eds[-1], hid, hid2)
-            eds.append(self.span_ed_attn(hid, hid, hid2, mask=mask, type="self")) # [batch, seq, seq]
+            eds.append(self.span_ed_attn(hid, hid, hid2, mask=mask)) # [batch, seq, seq]
         return torch.stack(sts[1:], -2), torch.stack(eds[1:], -2), torch.stack(masks, -1)
 
 # dist: [batch, seq, seq]
@@ -85,7 +85,8 @@ def convert_tokens_to_string(tokens):
     return out_string
 
 
-def decode_into_string(source, label_action, label_start, label_end, label_mask):
+def decode_into_string(source, label_action, label_start, label_end, label_mask,
+        context=None):
     assert len(source) == len(label_action)
 
     labels = []
@@ -101,7 +102,7 @@ def decode_into_string(source, label_action, label_start, label_end, label_mask)
             labels.append(action_map[label_action[idx]]+"|"+str(st)+"#"+str(ed))
         else:
             labels.append('DELETE')
-    output_tokens = tags_to_string(source, labels)
+    output_tokens = tags_to_string(source, labels, context=context)
     return convert_tokens_to_string(output_tokens)
 
 
@@ -121,24 +122,30 @@ class BertForSequenceTagging(BertPreTrainedModel):
 
         self.init_weights()
 
-    def forward(self, input_data, rl_model, attention_mask=None,
-            labels_action=None, labels_start=None, labels_end=None, sp_width=None):
-        input_ids, input_token_starts, input_ref = input_data
+    def forward(self, input_data, rl_model, attention_mask, labels_action,
+            labels_start, labels_end, sp_width, src_idx):
+        input_ids, input_ref = input_data
         outputs = self.bert(input_ids, attention_mask=attention_mask)
-        sequence_output = outputs[0]
+        seq_output = outputs[0]
+        src_mask = src_idx.gt(0)
+        src_output = seq_output.gather(1, src_idx.unsqueeze(2).expand(-1, -1,
+            seq_output.shape[2])) * src_mask.unsqueeze(2).to(seq_output.dtype)
+        src_idx = input_ids.gather(1, src_idx) * src_mask.long()
+        #src_output = self.bert(src_idx, attention_mask=src_mask)[0]
 
         if rl_model == None:
             self._rl_ratio = 0.0
-        logits = self.classifier(sequence_output) #[bs, seq, 2]
+        logits = self.classifier(src_output) #[bs, seq, 2]
 
         max_sp_len = labels_start.shape[-1]
-        start_dist, end_dist, loss_mask = self.span_classifier(sequence_output, sp_width, max_sp_len, attention_mask)
+        start_dist, end_dist, loss_mask = self.span_classifier(seq_output, sp_width, max_sp_len, attention_mask, src_output, src_mask)
         start_outputs = start_dist.argmax(dim=-1) # [batch, seq]
         end_outputs = end_dist.argmax(dim=-1) # [batch, seq]
 
         outputs = (logits, start_outputs, end_outputs)
-        labels_start = F.one_hot(labels_start, labels_start.shape[1]) #[bs, seq, sp_len, seq]
-        labels_end = F.one_hot(labels_end, labels_end.shape[1]) #[bs, seq, sp_len, seq]
+        num_classes = seq_output.shape[1]
+        labels_start = F.one_hot(labels_start, num_classes) #[bs, seq, sp_len, seq]
+        labels_end = F.one_hot(labels_end, num_classes) #[bs, seq, sp_len, seq]
         loss_span = span_loss(start_dist, end_dist, labels_start, labels_end, loss_mask.float())
 
         loss_fct = CrossEntropyLoss()
@@ -150,11 +157,11 @@ class BertForSequenceTagging(BertPreTrainedModel):
         loss = loss_fct(active_logits, active_labels) + loss_span
 
         if self._rl_ratio > 0.0:
-            bsz, seq_len  = start_dist.shape[:2]
+            bsz, seq_len, _, full_len = start_dist.shape
             perm = (0, 2, 1, 3)
             nview = (bsz, max_sp_len, seq_len, 1)
-            start_dist = start_dist.permute(*perm).reshape(-1, seq_len, seq_len)
-            end_dist = end_dist.permute(*perm).reshape(-1, seq_len, seq_len)
+            start_dist = start_dist.permute(*perm).reshape(-1, seq_len, full_len)
+            end_dist = end_dist.permute(*perm).reshape(-1, seq_len, full_len)
             samples_action = Categorical(logits=logits).sample() # [bs, seq]
             samples_start = Categorical(logits=start_dist).sample() # [bs, seq]
             samples_end = Categorical(logits=end_dist).sample() # [bs, seq]
@@ -204,7 +211,7 @@ class BertForSequenceTagging(BertPreTrainedModel):
 
             for i in range(len(samples_start)):
                 weight = (0.25, 0.25, 0.25, 0.25)
-                input_tokens = self.tokenizer.convert_ids_to_tokens(input_ids[i].tolist())
+                input_tokens = self.tokenizer.convert_ids_to_tokens(src_idx[i].tolist())
                 sample_str = decode_into_string(input_tokens, samples_action[i].tolist(), samples_start[i].tolist(), samples_end[i].tolist(), samples_mask[i].tolist())
                 greedy_str = decode_into_string(input_tokens, greedy_action[i].tolist(), greedy_start[i].tolist(), greedy_end[i].tolist(), samples_mask[i].tolist())
                 if type(rl_model) is str:
