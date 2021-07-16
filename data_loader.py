@@ -159,7 +159,6 @@ class DataLoader(object):
                 inp = list(zip(file1.readlines(), file2.readlines()))
         with Pool(n_proc) as p:
             out = p.map(self.get_sens_tags, inp)
-        #out = [self.get_sens_tags(x) for x in inp[:100]]
         d['data'], d['action'], d['start'], d['sp_width'], d['end'], d['ref'], d['src_idx'] = zip(*out)
         d['size'] = len(d['data'])
         assert len(d['data']) == len(d['action'])

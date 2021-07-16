@@ -131,7 +131,6 @@ class BertForSequenceTagging(BertPreTrainedModel):
         src_output = seq_output.gather(1, src_idx.unsqueeze(2).expand(-1, -1,
             seq_output.shape[2])) * src_mask.unsqueeze(2).to(seq_output.dtype)
         src_idx = input_ids.gather(1, src_idx) * src_mask.long()
-        #src_output = self.bert(src_idx, attention_mask=src_mask)[0]
 
         if rl_model == None:
             self._rl_ratio = 0.0

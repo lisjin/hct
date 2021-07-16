@@ -31,7 +31,7 @@ def get_phrs_add(args):
     for i, (k, v) in enumerate(unfound_phrs.items()):
         k = int(k)
         phrs_add[k] = []
-        for v2 in v:
+        for v2 in v['phr']:
             ctx_leaves = list(chain.from_iterable((cpts_uniq[c].leaves() + ['[SEP]'] for c in cids[i])))[:-1]
             phrs_add[k].append([])
             for t in merge_sps(ctx_sps[j]):
@@ -76,6 +76,7 @@ def proc_examples(args):
         os.path.join(args.data_dir, f'{args.split}.tsv'), args.tsv_fmt)):
         example, ret = builder.build_bert_example(
                 sources, target,
+                use_arbitrary_target_ids_for_infeasible_examples=not is_train,
                 phrs_new=phrs_add.get(i, []) if args.write else None,
                 all_phr=args.all_phr)
         if args.write:  # rewritten source sentence
