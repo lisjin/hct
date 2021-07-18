@@ -191,7 +191,7 @@ if __name__ == '__main__':
     data_dir = 'data_preprocess_en/' + args.dataset
 
     if args.dataset in ["canard_out"]:
-        bert_class = 'bert-base-uncased' # auto
+        bert_class = params.bert_class # auto
         # bert_class = 'pretrained_bert_models/bert-base-cased/' # manual
     elif args.dataset in ["emnlp19"]:
         bert_class = 'bert-base-chinese' # auto
@@ -202,7 +202,7 @@ if __name__ == '__main__':
     data_loader = DataLoader(data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1)
 
     # Load the model
-    model = BertForSequenceTagging.from_pretrained(args.restore_dir)
+    model = BertForSequenceTagging.from_pretrained(args.restore_dir, num_labels=len(params.tag2idx))
     model.to(params.device)
 
     #gpt_model = GPT2LMHeadModel.from_pretrained("./dialogue_model/")

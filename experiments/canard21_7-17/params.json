@@ -1,10 +1,12 @@
 {
+    "bert_class": "bert-base-uncased",
     "full_finetuning": true,
-    "max_len": 212,
+    "max_len": 360,
+    "max_sp_len": 3,
 
-    "learning_rate": 2e-5,
+    "learning_rate": 1e-5,
     "weight_decay": 0.01,
-    "clip_grad": 5,
+    "clip_grad": 3,
 
     "batch_size": 16,
     "epoch_num": 30,

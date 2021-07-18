@@ -22,35 +22,32 @@ transformers.logging.set_verbosity(transformers.logging.ERROR)
 
 def train_epoch(model, rl_model, data_iterator, optimizer, scheduler, params):
     """Train the model on `steps` batches"""
-    # set model to training mode
     model.train()
-
-    # a running average object for loss
     loss_avg = utils.RunningAverage()
 
-    # Use tqdm for progress bar
+    scaler = torch.cuda.amp.GradScaler()
     one_epoch = trange(params.train_steps)
+    prev_scale = scaler.get_scale()
     for batch in one_epoch:
-        # fetch the next training batch
         batch_data, batch_ref, batch_action, batch_start, batch_end, batch_sp_width, batch_src_idx = next(data_iterator)
         batch_masks = batch_data.gt(0) # get padding mask
 
-        # compute model output and loss
-        loss = model((batch_data, batch_ref), rl_model, attention_mask=batch_masks,
-            labels_action=batch_action, labels_start=batch_start, labels_end=batch_end, sp_width=batch_sp_width, src_idx=batch_src_idx)[0]
-
-        # clear previous gradients, compute gradients of all variables wrt loss
         model.zero_grad()
-        loss.backward()
+        with torch.cuda.amp.autocast():
+            loss = model((batch_data, batch_ref), rl_model, attention_mask=batch_masks,
+                labels_action=batch_action, labels_start=batch_start, labels_end=batch_end, sp_width=batch_sp_width, src_idx=batch_src_idx)[0]
+        scaler.scale(loss).backward()
 
-        # gradient clipping
+        scaler.unscale_(optimizer)
         nn.utils.clip_grad_norm_(parameters=model.parameters(), max_norm=params.clip_grad)
 
-        # performs updates using calculated gradients
-        optimizer.step()
-        scheduler.step()
+        scaler.step(optimizer)
+        scaler.update()
+        cur_scale = scaler.get_scale()
+        if cur_scale >= prev_scale:  # ensure that scaler called optimizer.step
+            scheduler.step()
+        prev_scale = cur_scale
 
-        # update the average loss
         loss_avg.update(loss.item())
         one_epoch.set_postfix(loss='{:05.3f}'.format(loss_avg()))
 
@@ -124,7 +121,7 @@ def main(args):
     data_dir = 'data_preprocess_en/' + args.dataset
 
     if args.dataset in ["canard_out"]:
-        bert_class = 'bert-base-uncased' # auto
+        bert_class = params.bert_class # auto
         # bert_class = 'pretrained_bert_models/bert-base-cased/' # manual
     elif args.dataset in ["task"]:
         bert_class = 'bert-base-cased'
@@ -151,9 +148,8 @@ def main(args):
     # Prepare model
     if args.restore_dir is not None:
         logging.info(f'Restoring model from {args.restore_dir}')
-        model = BertForSequenceTagging.from_pretrained(args.restore_dir)
-    else:
-        model = BertForSequenceTagging.from_pretrained(bert_class, num_labels=len(params.tag2idx))
+        bert_class = args.restore_dir
+    model = BertForSequenceTagging.from_pretrained(bert_class, num_labels=len(params.tag2idx))
     model.to(params.device)
 
     if args.gpt_rl:
@@ -191,7 +187,7 @@ def main(args):
 
     params.tagger_model_dir = args.model
     # Train and evaluate the model
-    logging.info("Starting training for {} epoch(s)".format(params.epoch_num))
+    logging.info("Starting training for {} epoch(s)".format(params.epoch_num - cur_epoch + 1))
     train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, args.model, cur_epoch)
 
 

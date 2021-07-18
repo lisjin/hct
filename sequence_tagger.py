@@ -7,9 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from transformers.models.bert.modeling_bert import *
-from torch.nn.utils.rnn import pad_sequence
-from transformers import BertTokenizer
+from transformers.models.bert.modeling_bert import BertPreTrainedModel, CrossEntropyLoss
+from transformers import BertTokenizer, BertModel
 from torch.distributions import Categorical
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 cc = SmoothingFunction()
@@ -41,7 +40,7 @@ class SpanClassifier(nn.Module):
 
     def forward(self, hid, sp_width, max_sp_len, attention_mask, src_hid, src_mask):
         amask = torch.logical_and(src_mask.unsqueeze(2), attention_mask.unsqueeze(1)).float()
-        attn_w0 = amask / torch.clamp(amask.sum(2, keepdim=True), min=1e-6)
+        attn_w0 = clip_and_normalize(amask, 1e-6)
         sts, eds, masks = [attn_w0], [attn_w0], []
         hid1, hid2 = src_hid, src_hid
         for i in range(max_sp_len):
@@ -49,9 +48,11 @@ class SpanClassifier(nn.Module):
             masks.append(mask)
             mask = mask.unsqueeze(-1) * amask
             hid1 = self.upd_hid(sts[-1], hid, hid1)
-            sts.append(self.span_st_attn(hid, hid, hid1, mask=mask)) # [batch, seq, seq]
             hid2 = self.upd_hid(eds[-1], hid, hid2)
-            eds.append(self.span_ed_attn(hid, hid, hid2, mask=mask)) # [batch, seq, seq]
+            with torch.cuda.amp.autocast(enabled=False):
+                hid_f32, mask_f32 = hid.float(), mask.float()
+                sts.append(self.span_st_attn(hid_f32, hid_f32, hid1.float(), mask=mask_f32)) # [batch, seq, seq]
+                eds.append(self.span_ed_attn(hid_f32, hid_f32, hid2.float(), mask=mask_f32)) # [batch, seq, seq]
         return torch.stack(sts[1:], -2), torch.stack(eds[1:], -2), torch.stack(masks, -1)
 
 # dist: [batch, seq, seq]
@@ -118,7 +119,6 @@ class BertForSequenceTagging(BertPreTrainedModel):
         self.span_classifier = SpanClassifier(config.hidden_size, 0.0)
         self._rl_ratio = 0.5
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-        #self._tokenizer = BertTokenizer.from_pretrained("./dialogue_model/")
 
         self.init_weights()
 
@@ -156,30 +156,26 @@ class BertForSequenceTagging(BertPreTrainedModel):
         loss = loss_fct(active_logits, active_labels) + loss_span
 
         if self._rl_ratio > 0.0:
+            samples_action = Categorical(logits=logits).sample() # [bs, seq]
+            samples_action_prob = torch.gather(logits, 2, samples_action.unsqueeze(dim=2)) #[bs, seq_len, 1]
+            samples_action_prob = samples_action_prob.unsqueeze(dim=2)
+            greedy_action = logits.argmax(dim=-1) # [bs, seq]
+
             bsz, seq_len, _, full_len = start_dist.shape
             perm = (0, 2, 1, 3)
-            nview = (bsz, max_sp_len, seq_len, 1)
             start_dist = start_dist.permute(*perm).reshape(-1, seq_len, full_len)
             end_dist = end_dist.permute(*perm).reshape(-1, seq_len, full_len)
-            samples_action = Categorical(logits=logits).sample() # [bs, seq]
+
             samples_start = Categorical(logits=start_dist).sample() # [bs, seq]
             samples_end = Categorical(logits=end_dist).sample() # [bs, seq]
-            samples_action_prob = torch.gather(logits, 2, samples_action.unsqueeze(dim=2)) #[bs, seq_len, 1]
             samples_start_prob = torch.gather(start_dist, 2, samples_start.unsqueeze(dim=2)) #[bs, seq_len, 1]
             samples_end_prob = torch.gather(end_dist, 2, samples_end.unsqueeze(dim=2)) #[bs, seq_len, 1]
 
+            nview = (bsz, max_sp_len, seq_len, 1)
             samples_start = samples_start.view(*nview[:-1]).permute(*perm[:-1])
             samples_end = samples_end.view(*nview[:-1]).permute(*perm[:-1])
-            samples_start_prob = samples_start_prob.view(*nview).permute(*perm)
-            samples_end_prob = samples_end_prob.view(*nview).permute(*perm)
-
-            samples_action_prob = samples_action_prob.unsqueeze(dim=2)
-            samples_start_prob = samples_start_prob.unsqueeze(dim=-1)
-            samples_end_prob = samples_end_prob.unsqueeze(dim=-1)
-
-            greedy_action = logits.argmax(dim=-1) # [bs, seq]
-            greedy_start = start_outputs # [bs, seq]
-            greedy_end = end_outputs # [bs, seq]
+            samples_start_prob = samples_start_prob.view(*nview).permute(*perm).unsqueeze(dim=-1)
+            samples_end_prob = samples_end_prob.view(*nview).permute(*perm).unsqueeze(dim=-1)
 
             rewards = []
             samples_mask = loss_mask.gt(-1).float()
@@ -212,7 +208,7 @@ class BertForSequenceTagging(BertPreTrainedModel):
                 weight = (0.25, 0.25, 0.25, 0.25)
                 input_tokens = self.tokenizer.convert_ids_to_tokens(src_idx[i].tolist())
                 sample_str = decode_into_string(input_tokens, samples_action[i].tolist(), samples_start[i].tolist(), samples_end[i].tolist(), samples_mask[i].tolist())
-                greedy_str = decode_into_string(input_tokens, greedy_action[i].tolist(), greedy_start[i].tolist(), greedy_end[i].tolist(), samples_mask[i].tolist())
+                greedy_str = decode_into_string(input_tokens, greedy_action[i].tolist(), start_outputs[i].tolist(), end_outputs[i].tolist(), samples_mask[i].tolist())
                 if type(rl_model) is str:
                     sample_score = sentence_bleu([input_ref[i].split()], sample_str.split(), weights=weight, smoothing_function=cc.method3)
                     greedy_score = sentence_bleu([input_ref[i].split()], greedy_str.split(), weights=weight, smoothing_function=cc.method3)

@@ -23,9 +23,9 @@ class DataLoader(object):
         params.tag2idx = self.tag2idx
         params.idx2tag = self.idx2tag
 
-        self.tokenizer = BertTokenizer.from_pretrained(bert_class, do_lower_case=False)
+        self.tokenizer = BertTokenizer.from_pretrained(bert_class)
 
-        self.max_sp_len = 3
+        self.max_sp_len = params.max_sp_len
         self.to_int = lambda x: int(x) + 1
 
     def load_tags(self):
@@ -177,9 +177,6 @@ class DataLoader(object):
             sentences_file = os.path.join(self.data_dir, data_type, 'sentences.txt')
             tags_path = os.path.join(self.data_dir, data_type, 'tags.txt')
             self.load_sentences_tags(sentences_file, tags_path, data)
-        elif data_type == 'interactive':
-            sentences_file = os.path.join(self.data_dir, data_type, 'sentences.txt')
-            self.load_sentences_tags(sentences_file, tags_file=None, d=data)
         else:
             raise ValueError(f"data type not in {allowed}")
         return data
