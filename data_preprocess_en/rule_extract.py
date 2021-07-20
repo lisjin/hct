@@ -9,7 +9,8 @@ from functools import partial
 from itertools import chain
 from nltk import Tree
 from pathos.multiprocessing import ProcessingPool as Pool
-from scipy.cluster.hierarchy import linkage
+from scipy.cluster.hierarchy import linkage, fcluster
+from sklearn.cluster import AffinityPropagation
 
 from fmatch_lem import fmatch_single
 from utils import fromstring, read_lem, read_expand, concat_path
@@ -90,6 +91,7 @@ class SlottedRule:
 
 
 def lcs_dist(r1, r2):
+    """Longest common subsequence distance over tokens in strings r1, r2."""
     t1, t2 = str(r1).split(), str(r2).split()
     if len(t1) > len(t2):
         t1, t2 = t2, t1
@@ -140,40 +142,34 @@ def count_rules(srs):
     return rules, nr
 
 
-def cluster_rules(rstrs, nr):
+def get_triu_dist(rstrs, nr):
+    """Return flat upper-triangular distance between strings.
+    Args:
+        rstrs: List of rule strings of length nr
+        nr: Number of rules
+    """
     tups = ((rstrs[i], rstrs[j]) for i in range(nr) for j in range(i + 1, nr))
     with Pool(args.n_proc) as p:
         triu_dist = p.map(lcs_dist, *zip(*tups))
-    Z = linkage(triu_dist, method='ward')
-    return triu_dist, Z
+    return triu_dist
 
 
-def filter_clusters(triu_dist, Z, nr, q=15):
-    cids, unseen = set(), np.ones(nr, dtype=int)
-
-    def upd_cids_unseen(x, nr):
-        nonlocal cids
-        nonlocal unseen
-        if x >= nr:
-            cids.remove(x)
-        else:
-            unseen[x] = 0
-
-    dist_thresh = np.percentile(triu_dist, q)
-    for i, (x, y, d, csz) in enumerate(Z):
-        cid = nr + i
-        x, y = int(x), int(y)
-        if d <= dist_thresh:
-            cids.add(cid)
-            upd_cids_unseen(x, nr)
-            upd_cids_unseen(y, nr)
-    print(f'Reduced to {len(cids)} (cluster) + {sum(unseen)} (single) rules')
-    return cids, unseen
+def triu_to_full(triu_dist, nr):
+    """Convert flat to full distance matrix.
+    Args:
+        triu_dist: Flat upper-triangular distance matrix
+        nr: Number of rules
+    """
+    dist = np.empty((nr, nr))
+    triu_mask = np.triu(np.ones((nr, nr), dtype=bool))
+    np.fill_diagonal(triu_mask, 0)
+    dist[triu_mask] = triu_dist
+    dist.T[triu_mask] = triu_dist
+    return dist
 
 
 def main(args):
     phrs, ctxs, tgts, cpts_tgt, phr_tgt_sps = read_fs(args)
-
     ems = partial(fmatch_single, match_fn=exact_match, tmode='bup')
     if not args.debug:
         with Pool(args.n_proc) as p:
@@ -185,8 +181,24 @@ def main(args):
 
     rules, nr = count_rules(srs)
     rstrs = list(rules.keys())
-    triu_dist, Z = cluster_rules(rstrs, nr)
-    cids, unseen = filter_clusters(triu_dist, Z, nr)
+    triu_dist = get_triu_dist(rstrs, nr)
+    if args.cluster_method == 'affinity':
+        # https://scikit-learn.org/stable/modules/generated/sklearn.cluster.AffinityPropagation.html
+        dist = triu_to_full(triu_dist, nr)
+        af = AffinityPropagation(affinity='precomputed', random_state=None).fit(-dist)
+        labels = af.labels_
+    elif args.cluster_method == 'hierarch':
+        # https://docs.scipy.org/doc/scipy/reference/cluster.hierarchy.html
+        Z = linkage(triu_dist, method='ward')
+        dist_thresh = np.percentile(triu_dist, args.perc_q)
+        labels = fcluster(Z, t=dist_thresh, criterion='distance')
+
+    clusters = {}
+    for k, v in enumerate(labels):
+        clusters.setdefault(v, []).append(k)
+    print(f'Reduced to {len(clusters)} rules')
+    with open(concat_path(args, args.out_f.format(args.cluster_method)), 'w', encoding='utf8') as f:
+        json.dump([[rstrs[j] for j in v] for v in clusters.values()], f, indent=4)
 
 
 if __name__ == '__main__':
@@ -196,6 +208,8 @@ if __name__ == '__main__':
     ap.add_argument('--n_proc', type=int, default=min(4, os.cpu_count()))
     ap.add_argument('--tsv_fmt', default='wikisplit')
     ap.add_argument('--debug', action='store_true')
-    ap.add_argument('--out_f', default='rule_{}_{}.json')
+    ap.add_argument('--out_f', default='rule_{}.json')
+    ap.add_argument('--perc_q', type=int, default=10, help='For --cluster_method=hierarch: percentile of pairwise distance to bound inter-cluster distance')
+    ap.add_argument('--cluster_method', default='affinity', choices=['affinity', 'hierarch'])
     args = ap.parse_args()
     main(args)
