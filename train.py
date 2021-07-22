@@ -20,17 +20,17 @@ import transformers
 transformers.logging.set_verbosity(transformers.logging.ERROR)
 
 
-def train_epoch(model, rl_model, data_iterator, optimizer, scheduler, params):
+def train_epoch(model, rl_model, data_iterator, optimizer, scheduler, params, pad_token_id):
     """Train the model on `steps` batches"""
     model.train()
     loss_avg = utils.RunningAverage()
 
     scaler = torch.cuda.amp.GradScaler()
-    one_epoch = trange(params.train_steps)
     prev_scale = scaler.get_scale()
+    one_epoch = trange(params.train_steps)
     for batch in one_epoch:
         batch_data, batch_ref, batch_action, batch_start, batch_end, batch_sp_width, batch_src_idx = next(data_iterator)
-        batch_masks = batch_data.gt(0) # get padding mask
+        batch_masks = batch_data.ne(pad_token_id) # get padding mask
 
         model.zero_grad()
         with torch.cuda.amp.autocast():
@@ -52,7 +52,7 @@ def train_epoch(model, rl_model, data_iterator, optimizer, scheduler, params):
         one_epoch.set_postfix(loss='{:05.3f}'.format(loss_avg()))
 
 
-def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, model_dir, cur_epoch):
+def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, optimizer, scheduler, params, model_dir, cur_epoch):
     """Train the model and evaluate every epoch."""
     best_val_bleu = 0.0
     patience_counter = 0
@@ -64,22 +64,17 @@ def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_
         # Compute number of batches in one epoch
         params.train_steps = math.ceil(params.train_size / params.batch_size)
         params.val_steps = math.ceil(params.val_size / params.batch_size)
-        params.test_steps = math.ceil(params.test_size / params.batch_size)
 
         # data iterator for training
         train_data_iterator = data_loader.data_iterator(train_data, shuffle=True)
 
         # Train for one epoch on training set
-        train_epoch(model, rl_model, train_data_iterator, optimizer, scheduler, params)
+        train_epoch(model, rl_model, train_data_iterator, optimizer, scheduler, params, data_loader.tokenizer.pad_token_id)
 
         # data iterator for evaluation
-        # train_data_iterator = data_loader.data_iterator(train_data, shuffle=False)
         val_data_iterator = data_loader.data_iterator(val_data, shuffle=False)
-        test_data_iterator = data_loader.data_iterator(test_data, shuffle=False)
 
         # Evaluate for one epoch on training set and validation set
-        # params.eval_steps = params.train_steps
-        # train_metrics = evaluate(model, train_data_iterator, params, mark='Train') # callback train f1
         params.eval_steps = params.val_steps
         val_metrics = evaluate(model, rl_model, val_data_iterator, params, epoch, mark='Val', best_val_bleu=best_val_bleu, optimizer=optimizer)
         if 'best_val_bleu' in val_metrics:
@@ -87,7 +82,7 @@ def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_
             patience_counter = 0
         else:
             patience_counter += 1
-        params.eval_steps = params.test_steps
+        params.eval_steps = params.val_steps
 
         # Early stopping and logging best BLEU
         if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
@@ -98,58 +93,28 @@ def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_
 def main(args):
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
-    # Load the parameters from json file
     json_path = os.path.join(args.model, 'params.json')
     assert os.path.isfile(json_path), "No json configuration file found at {}".format(json_path)
     params = utils.Params(json_path)
-
-    # Use GPUs if available
     params.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    # Set the random seed for reproducible experiments
+    params.seed = args.seed
     random.seed(args.seed)
     torch.manual_seed(args.seed)
-
-    params.seed = args.seed
-
-    # Set the logger
     utils.set_logger(os.path.join(args.model, 'train.log'))
 
-    # Create the input data pipeline
-
-    # Initialize the DataLoader
     data_dir = 'data_preprocess_en/' + args.dataset
-
-    if args.dataset in ["canard_out"]:
-        bert_class = params.bert_class # auto
-        # bert_class = 'pretrained_bert_models/bert-base-cased/' # manual
-    elif args.dataset in ["task"]:
-        bert_class = 'bert-base-cased'
-    elif args.dataset in ["emnlp19"]:
-        #bert_class = 'bert-base-chinese' # auto
-        bert_class = 'pretrained_bert_models/bert-base-tagging-additive_emnlp/'
-        #bert_class = 'pretrained_bert_models/bert-base-chinese/' # manual
-    elif args.dataset in ["acl19"]:
-        #bert_class = 'bert-base-chinese'
-        bert_class = 'pretrained_bert_models/bert-base-tagging-additive/'
-
+    bert_class = params.bert_class
     data_loader = DataLoader(data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1)
-
-    # Load training data and test data
     train_data = data_loader.load_data('train')
     val_data = data_loader.load_data('dev')
-    test_data = data_loader.load_data('test')
-
-    # Specify the training and validation dataset sizes
     params.train_size = train_data['size']
     params.val_size = val_data['size']
-    params.test_size = test_data['size']
 
     # Prepare model
     if args.restore_dir is not None:
         logging.info(f'Restoring model from {args.restore_dir}')
         bert_class = args.restore_dir
-    model = BertForSequenceTagging.from_pretrained(bert_class, num_labels=len(params.tag2idx))
+    model = BertForSequenceTagging.from_pretrained(bert_class, num_labels=len(params.tag2idx), pad_token_id=data_loader.tokenizer.pad_token_id)
     model.to(params.device)
 
     if args.gpt_rl:
@@ -183,12 +148,12 @@ def main(args):
         optimizer.load_state_dict(osd)
         cur_epoch = int(os.path.basename(os.path.normpath(args.restore_dir))) + 1
     train_steps_per_epoch = math.ceil(params.train_size // params.batch_size)
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=train_steps_per_epoch, num_training_steps=params.epoch_num * train_steps_per_epoch)
+    num_warmup_steps = train_steps_per_epoch * 2
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=params.epoch_num * train_steps_per_epoch, last_epoch=cur_epoch - 2)
 
     params.tagger_model_dir = args.model
-    # Train and evaluate the model
     logging.info("Starting training for {} epoch(s)".format(params.epoch_num - cur_epoch + 1))
-    train_and_evaluate(model, rl_model, data_loader, train_data, val_data, test_data, optimizer, scheduler, params, args.model, cur_epoch)
+    train_and_evaluate(model, rl_model, data_loader, train_data, val_data, optimizer, scheduler, params, args.model, cur_epoch)
 
 
 if __name__ == '__main__':

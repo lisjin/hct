@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from functools import partial
 from transformers.models.bert.modeling_bert import BertPreTrainedModel, CrossEntropyLoss
 from transformers import BertTokenizer, BertModel
 from torch.distributions import Categorical
@@ -55,23 +56,17 @@ class SpanClassifier(nn.Module):
                 eds.append(self.span_ed_attn(hid_f32, hid_f32, hid2.float(), mask=mask_f32)) # [batch, seq, seq]
         return torch.stack(sts[1:], -2), torch.stack(eds[1:], -2), torch.stack(masks, -1)
 
-# dist: [batch, seq, seq]
-# refs: [batch, seq, seq]
-# masks: [batch, seq]
-def token_classification_loss_v2(dist, refs, masks):
-    loss = torch.sum(dist.log() * refs.float(), dim=-1) # [batch, seq]
-    num_tokens = torch.sum(masks).item()
-    #assert num_tokens > 1
-    return -1.0 * torch.sum(loss * masks) / num_tokens if num_tokens > 0 else torch.sum(loss * 0.0)
 
-# start_dist: [batch, seq, seq]
-# end_dist: [batch, seq, seq]
-# start_positions: [batch, seq, seq]
-# end_positions: [batch, seq, seq]
-# seq_masks: [batch, seq]
+def classif_loss(dist, refs, masks):
+    refs = F.one_hot(refs, dist.shape[-1])
+    loss = torch.sum(dist.log() * refs.float(), dim=-1)
+    num_tokens = torch.sum(masks).item()
+    return -torch.sum(loss * masks) / num_tokens
+
+
 def span_loss(start_dist, end_dist, start_positions, end_positions, seq_masks):
-    span_st_loss = token_classification_loss_v2(start_dist, start_positions, seq_masks)
-    span_ed_loss = token_classification_loss_v2(end_dist, end_positions, seq_masks)
+    span_st_loss = classif_loss(start_dist, start_positions, seq_masks)
+    span_ed_loss = classif_loss(end_dist, end_positions, seq_masks)
     return span_st_loss + span_ed_loss
 
 
@@ -92,17 +87,18 @@ def decode_into_string(source, label_action, label_start, label_end, label_mask,
 
     labels = []
     action_map = {0:"KEEP", 1:"DELETE"}
+    stop_i = 0
     for idx in range(0, len(label_action)):
-        if (idx < len(label_action) and label_mask[idx]):
-            if label_end[idx] == 0 or label_start[idx] > label_end[idx]:
-                st = 0
-                ed = 0
-            else:
+        st, ed = stop_i, stop_i
+        if label_mask[idx]:
+            if label_start[idx] != stop_i and label_end[idx] != stop_i and\
+                    label_start[idx] <= label_end[idx]:
                 st = dutils.ilst2str(label_start[idx])
                 ed = dutils.ilst2str(label_end[idx])
-            labels.append(action_map[label_action[idx]]+"|"+str(st)+"#"+str(ed))
+            action = action_map[label_action[idx]]
         else:
-            labels.append('DELETE')
+            action = action_map[1]
+        labels.append(f'{action}|{st}#{ed}')
     output_tokens = tags_to_string(source, labels, context=context)
     return convert_tokens_to_string(output_tokens)
 
@@ -119,6 +115,9 @@ class BertForSequenceTagging(BertPreTrainedModel):
         self.span_classifier = SpanClassifier(config.hidden_size, 0.0)
         self._rl_ratio = 0.5
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.pad_token_id = config.pad_token_id
+        self.bleu_fn = partial(sentence_bleu, weights=(.25,) * 4,
+                smoothing_function=cc.method3)
 
         self.init_weights()
 
@@ -127,107 +126,81 @@ class BertForSequenceTagging(BertPreTrainedModel):
         input_ids, input_ref = input_data
         outputs = self.bert(input_ids, attention_mask=attention_mask)
         seq_output = outputs[0]
-        src_mask = src_idx.gt(0)
+        src_mask = src_idx.ne(self.pad_token_id)
         src_output = seq_output.gather(1, src_idx.unsqueeze(2).expand(-1, -1,
             seq_output.shape[2])) * src_mask.unsqueeze(2).to(seq_output.dtype)
         src_idx = input_ids.gather(1, src_idx) * src_mask.long()
 
-        if rl_model == None:
-            self._rl_ratio = 0.0
         logits = self.classifier(src_output) #[bs, seq, 2]
 
         max_sp_len = labels_start.shape[-1]
-        start_dist, end_dist, loss_mask = self.span_classifier(seq_output, sp_width, max_sp_len, attention_mask, src_output, src_mask)
-        start_outputs = start_dist.argmax(dim=-1) # [batch, seq]
-        end_outputs = end_dist.argmax(dim=-1) # [batch, seq]
+        start_dist, end_dist, sp_loss_mask = self.span_classifier(seq_output, sp_width, max_sp_len, attention_mask, src_output, src_mask)
+        sp_loss_mask = sp_loss_mask.float()
+        start_outputs = start_dist.argmax(dim=-1)
+        end_outputs = end_dist.argmax(dim=-1)
 
-        outputs = (logits, start_outputs, end_outputs)
-        num_classes = seq_output.shape[1]
-        labels_start = F.one_hot(labels_start, num_classes) #[bs, seq, sp_len, seq]
-        labels_end = F.one_hot(labels_end, num_classes) #[bs, seq, sp_len, seq]
-        loss_span = span_loss(start_dist, end_dist, labels_start, labels_end, loss_mask.float())
+        loss_span = span_loss(start_dist, end_dist, labels_start, labels_end, sp_loss_mask)
 
-        loss_fct = CrossEntropyLoss()
-        # Only keep active parts of the loss
-        loss_mask = labels_action.gt(-1)
-        active_loss = loss_mask.view(-1) == 1
+        loss_fn = CrossEntropyLoss()
+        act_loss_mask = labels_action.gt(-1)
+        active_loss = act_loss_mask.view(-1)
         active_logits = logits.view(-1, self.num_labels)[active_loss]
         active_labels = labels_action.view(-1)[active_loss]
-        loss = loss_fct(active_logits, active_labels) + loss_span
+        loss = loss_fn(active_logits, active_labels) + loss_span
 
-        if self._rl_ratio > 0.0:
-            samples_action = Categorical(logits=logits).sample() # [bs, seq]
-            samples_action_prob = torch.gather(logits, 2, samples_action.unsqueeze(dim=2)) #[bs, seq_len, 1]
-            samples_action_prob = samples_action_prob.unsqueeze(dim=2)
-            greedy_action = logits.argmax(dim=-1) # [bs, seq]
+        if rl_model is not None:
+            loss_rl = self.apply_rl(logits, start_dist, end_dist, start_outputs,
+                    end_outputs, src_idx, act_loss_mask, sp_loss_mask, input_ref, max_sp_len)
+            loss = (1. - self._rl_ratio) * loss + self._rl_ratio * loss_rl
 
-            bsz, seq_len, _, full_len = start_dist.shape
-            perm = (0, 2, 1, 3)
-            start_dist = start_dist.permute(*perm).reshape(-1, seq_len, full_len)
-            end_dist = end_dist.permute(*perm).reshape(-1, seq_len, full_len)
-
-            samples_start = Categorical(logits=start_dist).sample() # [bs, seq]
-            samples_end = Categorical(logits=end_dist).sample() # [bs, seq]
-            samples_start_prob = torch.gather(start_dist, 2, samples_start.unsqueeze(dim=2)) #[bs, seq_len, 1]
-            samples_end_prob = torch.gather(end_dist, 2, samples_end.unsqueeze(dim=2)) #[bs, seq_len, 1]
-
-            nview = (bsz, max_sp_len, seq_len, 1)
-            samples_start = samples_start.view(*nview[:-1]).permute(*perm[:-1])
-            samples_end = samples_end.view(*nview[:-1]).permute(*perm[:-1])
-            samples_start_prob = samples_start_prob.view(*nview).permute(*perm).unsqueeze(dim=-1)
-            samples_end_prob = samples_end_prob.view(*nview).permute(*perm).unsqueeze(dim=-1)
-
-            rewards = []
-            samples_mask = loss_mask.gt(-1).float()
-
-            def gpt_score(sentence):
-                tokenize_input = self._tokenizer.tokenize(sentence)
-                if len(tokenize_input)>300:
-                    tokenize_input = tokenize_input[:300]
-                tensor_input = torch.tensor([self._tokenizer.convert_tokens_to_ids(tokenize_input)])
-                tensor_input = tensor_input.cuda()
-                outputs = gpt_model(input_ids=tensor_input, labels=tensor_input)
-                loss = outputs[0]
-                if math.exp(loss) >0.0:
-                    ppl = loss
-                else:
-                    return 0.0
-                b = 5.92+3*1.84
-                a = 5.92-3*1.84
-                #b = 6.24+3*1.99
-                #a = 6.24-3*1.99
-                if ppl > b:
-                    ppl_norm = 1.0
-                elif ppl < a:
-                    ppl_norm = 0.0
-                else:
-                    ppl_norm = (b-ppl)/(b-a)
-                return ppl_norm
-
-            for i in range(len(samples_start)):
-                weight = (0.25, 0.25, 0.25, 0.25)
-                input_tokens = self.tokenizer.convert_ids_to_tokens(src_idx[i].tolist())
-                sample_str = decode_into_string(input_tokens, samples_action[i].tolist(), samples_start[i].tolist(), samples_end[i].tolist(), samples_mask[i].tolist())
-                greedy_str = decode_into_string(input_tokens, greedy_action[i].tolist(), start_outputs[i].tolist(), end_outputs[i].tolist(), samples_mask[i].tolist())
-                if type(rl_model) is str:
-                    sample_score = sentence_bleu([input_ref[i].split()], sample_str.split(), weights=weight, smoothing_function=cc.method3)
-                    greedy_score = sentence_bleu([input_ref[i].split()], greedy_str.split(), weights=weight, smoothing_function=cc.method3)
-                elif rl_model is not None:
-                    sample_score = gpt_score(sample_str)
-                    greedy_score = gpt_score(greedy_str)
-                rewards.append(sample_score-greedy_score)
-
-            rewards = torch.tensor(rewards).cuda()
-
-            loss_action_rl = -1.0 * clip_and_normalize(samples_action_prob, 1e-6).log()*rewards.unsqueeze(dim=1)*samples_mask
-            loss_action_rl = loss_action_rl.sum()/samples_mask.sum()
-            loss_st_rl = -1.0 * clip_and_normalize(samples_start_prob, 1e-6).log()*rewards.unsqueeze(dim=1)*samples_mask
-            loss_st_rl = loss_st_rl.sum()/samples_mask.sum()
-            loss_ed_rl = -1.0 * clip_and_normalize(samples_end_prob, 1e-6).log()*rewards.unsqueeze(dim=1)*samples_mask
-            loss_ed_rl = loss_ed_rl.sum()/samples_mask.sum()
-
-            loss_rl = loss_action_rl + loss_st_rl + loss_ed_rl
-            loss = (1.0 - self._rl_ratio) * loss + self._rl_ratio * loss_rl
-
-        outputs = (loss,) + outputs
+        outputs = (loss, logits, start_outputs, end_outputs)
         return outputs  # (loss), scores
+
+    def apply_rl(self, logits, start_dist, end_dist, start_outputs, end_outputs,
+            src_idx, act_loss_mask, sp_loss_mask, input_ref, max_sp_len, perm=(0, 2, 1, 3)):
+        samples_action = Categorical(logits=logits).sample() # [bs, seq]
+        samples_action_prob = torch.gather(logits, 2, samples_action.unsqueeze(dim=2)) #[bs, seq_len, 1]
+        greedy_action = logits.argmax(dim=-1) # [bs, seq]
+
+        bsz, seq_len, _, full_len = start_dist.shape
+        start_dist = start_dist.permute(*perm).reshape(-1, seq_len, full_len)
+        end_dist = end_dist.permute(*perm).reshape(-1, seq_len, full_len)
+
+        samples_start = Categorical(logits=start_dist).sample() # [bs, seq]
+        samples_end = Categorical(logits=end_dist).sample() # [bs, seq]
+        samples_start_prob = torch.gather(start_dist, 2, samples_start.unsqueeze(dim=2)) #[bs, seq_len, 1]
+        samples_end_prob = torch.gather(end_dist, 2, samples_end.unsqueeze(dim=2)) #[bs, seq_len, 1]
+
+        nview = (bsz, max_sp_len, seq_len)
+        samples_start = samples_start.view(*nview).permute(*perm[:-1])
+        samples_end = samples_end.view(*nview).permute(*perm[:-1])
+        samples_start_prob = samples_start_prob.view(*nview).permute(*perm[:-1])
+        samples_end_prob = samples_end_prob.view(*nview).permute(*perm[:-1])
+
+        rewards = []
+        act_loss_mask = act_loss_mask.float()
+        for i in range(len(samples_start)):
+            input_tokens = self.tokenizer.convert_ids_to_tokens(src_idx[i].tolist())
+            loss_mask_lst = act_loss_mask[i].tolist()
+            sample_str = decode_into_string(input_tokens, samples_action[i].tolist(), samples_start[i].tolist(), samples_end[i].tolist(), loss_mask_lst)
+            greedy_str = decode_into_string(input_tokens, greedy_action[i].tolist(), start_outputs[i].tolist(), end_outputs[i].tolist(), loss_mask_lst)
+
+            input_ref_lst = [input_ref[i].split()]
+            sample_score = self.bleu_fn(input_ref_lst, sample_str.split())
+            greedy_score = self.bleu_fn(input_ref_lst, greedy_str.split())
+            rewards.append(sample_score - greedy_score)
+
+        rewards = torch.as_tensor(rewards, device=logits.device).unsqueeze(1)
+        loss_action_rl = self.rl_loss(samples_action_prob.squeeze(2), act_loss_mask, rewards)
+        rewards = rewards.unsqueeze(2)
+        loss_st_rl = self.rl_loss(samples_start_prob, sp_loss_mask, rewards)
+        loss_ed_rl = self.rl_loss(samples_end_prob, sp_loss_mask, rewards)
+
+        loss_rl = loss_action_rl + loss_st_rl + loss_ed_rl
+        return loss_rl
+
+    @staticmethod
+    def rl_loss(prob, mask, rewards):
+        loss = -clip_and_normalize(prob, 1e-6).log()
+        loss *= rewards * mask
+        return loss.sum() / mask.sum()

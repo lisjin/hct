@@ -140,7 +140,7 @@ def convert_tokens_to_string(tokens):
     return out_string
 
 
-def tags_to_string(source, labels, context=None):
+def tags_to_string(source, labels, context=None, ignore_toks=set(['[SEP]', '[CLS]', '[UNK]', '|', '*']), stop_i=0):
     output_tokens = []
     if context is None:
         context = source
@@ -148,20 +148,17 @@ def tags_to_string(source, labels, context=None):
         added_phrase = tag.split("|")[1]
         starts, ends = added_phrase.split("#")[0], added_phrase.split("#")[1]
         starts, ends = starts.split(','), ends.split(',')
-        stop_i = 0
         for i, start in enumerate(starts):
             s_i, e_i = int(start), int(ends[i])
             if s_i == stop_i:
                 break
             if e_i >= s_i and e_i > 0:
-                add_phrase = [s for s in context[s_i:e_i+1]]
+                add_phrase = [s for s in context[s_i:e_i+1] if s not in ignore_toks]
                 if add_phrase:
-                    add_phrase = " ".join(add_phrase)
-                    output_tokens.append(add_phrase)
+                    output_tokens.extend(add_phrase)
         if tag.split("|")[0]=="KEEP":
-            output_tokens.append(token)
-
-    output_tokens = " ".join(output_tokens).replace(' [SEP]', '').replace('[UNK]', '').replace('[CLS]', '').replace(' |', '').replace(' *', '').split()
+            if token not in ignore_toks:
+                output_tokens.append(token)
 
     if len(output_tokens)==0:
        output_tokens.append("*")
