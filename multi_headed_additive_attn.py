@@ -8,15 +8,12 @@ from misc import generate_relative_positions_matrix,\
 from misc import aeq
 
 class Additive_Attention(nn.Module):
-    def __init__(self, model_dim, dropout=0.1):
-
+    def __init__(self, model_dim):
         super(Additive_Attention, self).__init__()
 
         self.linear_concat = nn.Linear(model_dim*2,model_dim)
         self.linear_logit = nn.Linear(model_dim,1)
 
-        self.softmax = nn.Softmax(dim=-1)
-        #self.dropout = nn.Dropout(dropout)
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -42,15 +39,6 @@ class Additive_Attention(nn.Module):
         :returns: A dict with the following keys:
             weights: A tensor with shape [batch, length_q, length_kv]
         """
-        def attention_bias(inputs, inf=-1e9):
-            ret = (1.0 - inputs) * inf
-            ret = ret.unsqueeze(dim=1)
-            if len(ret.shape) < 4:
-                ret = ret.unsqueeze(dim=1)
-            return ret
-
-        bias = attention_bias(mask)
-
         length_q = queries.size(2)
         length_kv = keys.size(2)
 
@@ -63,15 +51,14 @@ class Additive_Attention(nn.Module):
 
         # shape: [batch, heads, length_q, length_kv]
         logits = self.linear_logit(combined).squeeze(-1)
-
-        if bias is not None:
-            logits += bias
-
-        weights = self.softmax(logits)
-
-        #weights = self.dropout(weights)
-
-        return weights.squeeze(dim=1) # [bs, seq, seq]
+        if mask is not None:
+            mask = torch.logical_not(mask)
+            mask.masked_fill_(mask.all(-1, keepdim=True), 0)
+            if len(mask.shape) == len(logits.shape) - 1:
+                mask = mask.unsqueeze(1)
+        logits.masked_fill_(mask, -float('inf'))
+        weights = nn.functional.softmax(logits, dim=-1)
+        return weights.squeeze(dim=1)
 
 class MultiHeadedAttention(nn.Module):
     """Multi-Head Attention module from "Attention is All You Need"
@@ -108,8 +95,7 @@ class MultiHeadedAttention(nn.Module):
        dropout (float): dropout parameter
     """
 
-    def __init__(self, head_count, model_dim, dropout=0.1,
-                 max_relative_positions=0):
+    def __init__(self, head_count, model_dim, max_relative_positions=0):
         assert model_dim % head_count == 0
         self.dim_per_head = model_dim // head_count
         self.model_dim = model_dim
@@ -123,11 +109,10 @@ class MultiHeadedAttention(nn.Module):
                                        head_count * self.dim_per_head)
         self.linear_query = nn.Linear(model_dim,
                                       head_count * self.dim_per_head)
-        self.dropout = nn.Dropout(dropout)
         self.final_linear = nn.Linear(model_dim, model_dim)
 
         self.max_relative_positions = max_relative_positions
-        self.additive_attention = Additive_Attention(model_dim, dropout)
+        self.additive_attention = Additive_Attention(model_dim)
 
         if max_relative_positions > 0:
             vocab_size = max_relative_positions * 2 + 1
@@ -161,50 +146,21 @@ class MultiHeadedAttention(nn.Module):
            * output context vectors ``(batch, query_len, dim)``
            * one of the attention vectors ``(batch, query_len, key_len)``
         """
-
-        # CHECKS
-        # batch, k_len, d = key.size()
-        # batch_, k_len_, d_ = value.size()
-        # aeq(batch, batch_)
-        # aeq(k_len, k_len_)
-        # aeq(d, d_)
-        # batch_, q_len, d_ = query.size()
-        # aeq(batch, batch_)
-        # aeq(d, d_)
-        # aeq(self.model_dim % 8, 0)
-        # if mask is not None:
-        #    batch_, q_len_, k_len_ = mask.size()
-        #    aeq(batch_, batch)
-        #    aeq(k_len_, k_len)
-        #    aeq(q_len_ == q_len)
-        # END CHECKS
-
         assert self.head_count == 1, "We want a single attention distribution, \
                 not multiple ones for multiple heads"
 
-        batch_size = key.size(0)
-        dim_per_head = self.dim_per_head
-        head_count = self.head_count
-        key_len = key.size(1)
-        query_len = query.size(1)
-        device = key.device
+        batch_size = key.shape[0]
+        final_shape = (batch_size, -1, self.head_count, self.dim_per_head)
 
         def shape(x):
             """Projection."""
-            return x.view(batch_size, -1, head_count, dim_per_head) \
-                .transpose(1, 2)
-
-        def unshape(x):
-            """Compute context."""
-            return x.transpose(1, 2).contiguous() \
-                    .view(batch_size, -1, head_count * dim_per_head)
+            nonlocal final_shape
+            return x.view(*final_shape).transpose(1, 2)
 
         # 1) Project key, value, and query.
         key = self.linear_keys(key)
         value = self.linear_values(value)
         query = self.linear_query(query)
-        key = shape(key)
-        value = shape(value)
 
         if self.max_relative_positions > 0 and type == "self":
             key_len = key.size(2)
@@ -212,37 +168,11 @@ class MultiHeadedAttention(nn.Module):
             relative_positions_matrix = generate_relative_positions_matrix(
                 key_len, self.max_relative_positions,
                 cache=True if layer_cache is not None else False)
-            #  1 or key_len x key_len x dim_per_head
+            # 1 or key_len x key_len x dim_per_head
             relations_keys = self.relative_positions_embeddings(
-                relative_positions_matrix.to(device))
-            ##  1 or key_len x key_len x dim_per_head
-            #relations_values = self.relative_positions_embeddings(
-            #    relative_positions_matrix.to(device))
+                relative_positions_matrix.to(key.device))
 
-        query = shape(query)
-
-        key_len = key.size(2)
-        query_len = query.size(2)
-
-        # 2) Calculate and scale scores.
-        query = query / math.sqrt(dim_per_head)
-
-        # batch x num_heads x query_len x key_len
-        #query_key = torch.matmul(query, key.transpose(2, 3))
-
-        #if self.max_relative_positions > 0 and type == "self":
-        #    scores = query_key + relative_matmul(query, relations_keys, True)
-        #else:
-        #    scores = query_key
-        #scores = scores.float()
-
-        scores = self.additive_attention(query, key, value, mask)
-
-        #if mask is not None:
-        #    mask = mask.unsqueeze(1)  # [B, 1, 1, T_values]
-        #    scores = scores.masked_fill(mask, -1e18)
-
-        dist = torch.clamp(scores, 1e-6, 1.0)
-        dist = dist / dist.sum(-1,keepdim=True)
-
-        return dist.view(batch_size, query_len, key_len)
+        query = shape(query) / math.sqrt(self.dim_per_head)
+        key = shape(key)
+        value = shape(value)
+        return self.additive_attention(query, key, value, mask)

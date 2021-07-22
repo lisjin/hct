@@ -12,11 +12,13 @@ from transformers.models.bert.modeling_bert import BertPreTrainedModel, CrossEnt
 from transformers import BertTokenizer, BertModel
 from torch.distributions import Categorical
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
+
+from utils import convert_tokens_to_string, get_sp_strs
+
 cc = SmoothingFunction()
 
 from utils import tags_to_string
 from multi_headed_additive_attn import MultiHeadedAttention
-from data_preprocess_en import utils as dutils
 
 # span classifier based on self-attention
 class SpanClassifier(nn.Module):
@@ -41,13 +43,15 @@ class SpanClassifier(nn.Module):
 
     def forward(self, hid, sp_width, max_sp_len, attention_mask, src_hid, src_mask):
         amask = torch.logical_and(src_mask.unsqueeze(2), attention_mask.unsqueeze(1)).float()
-        attn_w0 = clip_and_normalize(amask, 1e-6)
+        attn_d = amask.sum(-1, keepdim=True)
+        attn_d.masked_fill_(attn_d == 0, 1.)
+        attn_w0 = amask / attn_d
         sts, eds, masks = [attn_w0], [attn_w0], []
         hid1, hid2 = src_hid, src_hid
         for i in range(max_sp_len):
             mask = (i < sp_width).float()
             masks.append(mask)
-            mask = mask.unsqueeze(-1) * amask
+            mask = torch.logical_and(mask.unsqueeze(-1), amask)
             hid1 = self.upd_hid(sts[-1], hid, hid1)
             hid2 = self.upd_hid(eds[-1], hid, hid2)
             with torch.cuda.amp.autocast(enabled=False):
@@ -59,7 +63,7 @@ class SpanClassifier(nn.Module):
 
 def classif_loss(dist, refs, masks):
     refs = F.one_hot(refs, dist.shape[-1])
-    loss = torch.sum(dist.log() * refs.float(), dim=-1)
+    loss = torch.sum((dist + 1e-12).log() * refs.float(), dim=-1)
     num_tokens = torch.sum(masks).item()
     return -torch.sum(loss * masks) / num_tokens
 
@@ -75,26 +79,19 @@ def clip_and_normalize(word_probs, epsilon):
     return word_probs / word_probs.sum(dim=-1, keepdim=True)
 
 
-def convert_tokens_to_string(tokens):
-    """ Converts a sequence of tokens (string) in a single string. """
-    out_string = " ".join(tokens).replace(" ##", "").strip()
-    return out_string
-
-
 def decode_into_string(source, label_action, label_start, label_end, label_mask,
         context=None):
     assert len(source) == len(label_action)
-
     labels = []
     action_map = {0:"KEEP", 1:"DELETE"}
     stop_i = 0
+    if context is None:
+        context = source
+    max_i = len(context) - 1
     for idx in range(0, len(label_action)):
         st, ed = stop_i, stop_i
         if label_mask[idx]:
-            if label_start[idx] != stop_i and label_end[idx] != stop_i and\
-                    label_start[idx] <= label_end[idx]:
-                st = dutils.ilst2str(label_start[idx])
-                ed = dutils.ilst2str(label_end[idx])
+            st, ed = get_sp_strs(label_start[idx], label_end[idx], max_i)
             action = action_map[label_action[idx]]
         else:
             action = action_map[1]
@@ -150,14 +147,14 @@ class BertForSequenceTagging(BertPreTrainedModel):
 
         if rl_model is not None:
             loss_rl = self.apply_rl(logits, start_dist, end_dist, start_outputs,
-                    end_outputs, src_idx, act_loss_mask, sp_loss_mask, input_ref, max_sp_len)
+                    end_outputs, src_idx, input_ids, attention_mask, act_loss_mask, sp_loss_mask, input_ref, max_sp_len)
             loss = (1. - self._rl_ratio) * loss + self._rl_ratio * loss_rl
 
         outputs = (loss, logits, start_outputs, end_outputs)
         return outputs  # (loss), scores
 
     def apply_rl(self, logits, start_dist, end_dist, start_outputs, end_outputs,
-            src_idx, act_loss_mask, sp_loss_mask, input_ref, max_sp_len, perm=(0, 2, 1, 3)):
+            src_idx, ctx_idx, attention_mask, act_loss_mask, sp_loss_mask, input_ref, max_sp_len, perm=(0, 2, 1, 3)):
         samples_action = Categorical(logits=logits).sample() # [bs, seq]
         samples_action_prob = torch.gather(logits, 2, samples_action.unsqueeze(dim=2)) #[bs, seq_len, 1]
         greedy_action = logits.argmax(dim=-1) # [bs, seq]
@@ -180,10 +177,13 @@ class BertForSequenceTagging(BertPreTrainedModel):
         rewards = []
         act_loss_mask = act_loss_mask.float()
         for i in range(len(samples_start)):
-            input_tokens = self.tokenizer.convert_ids_to_tokens(src_idx[i].tolist())
+            src_len = act_loss_mask[i].long().sum()
+            src_tokens = self.tokenizer.convert_ids_to_tokens(src_idx[i][:src_len].tolist())
+            ctx_len = attention_mask[i].long().sum()
+            ctx_tokens = self.tokenizer.convert_ids_to_tokens(ctx_idx[i][:ctx_len].tolist())
             loss_mask_lst = act_loss_mask[i].tolist()
-            sample_str = decode_into_string(input_tokens, samples_action[i].tolist(), samples_start[i].tolist(), samples_end[i].tolist(), loss_mask_lst)
-            greedy_str = decode_into_string(input_tokens, greedy_action[i].tolist(), start_outputs[i].tolist(), end_outputs[i].tolist(), loss_mask_lst)
+            sample_str = decode_into_string(src_tokens, samples_action[i][:src_len].tolist(), samples_start[i][:src_len].tolist(), samples_end[i][:src_len].tolist(), loss_mask_lst, context=ctx_tokens)
+            greedy_str = decode_into_string(src_tokens, greedy_action[i][:src_len].tolist(), start_outputs[i][:src_len].tolist(), end_outputs[i][:src_len].tolist(), loss_mask_lst, context=ctx_tokens)
 
             input_ref_lst = [input_ref[i].split()]
             sample_score = self.bleu_fn(input_ref_lst, sample_str.split())

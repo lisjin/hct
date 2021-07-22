@@ -1,6 +1,6 @@
-MODEL_DIR="experiments/canard21_2"
+MODEL_DIR="experiments/canard21_07-21"
 python evaluate.py \
         --dataset canard_out \
         --model $MODEL_DIR \
         --gpu 3 \
-        --restore_dir "$MODEL_DIR/8"
+        --restore_dir "$MODEL_DIR/26"

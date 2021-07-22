@@ -1,9 +1,10 @@
 import os
 import json
 import torch
-import shutil
 import logging
 import numpy as np
+
+from data_preprocess_en import utils as dutils
 
 
 class Params():
@@ -91,77 +92,76 @@ def set_logger(log_path):
         logger.addHandler(stream_handler)
 
 
-def save_checkpoint(state, is_best, checkpoint):
-    """Saves model and training parameters at checkpoint + 'last.pth.tar'. If is_best==True, also saves
-    checkpoint + 'best.pth.tar'
-
-    Args:
-        state: (dict) contains model's state_dict, may contain other keys such as epoch, optimizer state_dict
-        is_best: (bool) True if it is the best model seen till now
-        checkpoint: (string) folder where parameters are to be saved
-    """
-    filepath = os.path.join(checkpoint, 'last.pth.tar')
-    if not os.path.exists(checkpoint):
-        print("Checkpoint Directory does not exist! Making directory {}".format(checkpoint))
-        os.mkdir(checkpoint)
-    torch.save(state, filepath)
-    if is_best:
-        shutil.copyfile(filepath, os.path.join(checkpoint, 'best.pth.tar'))
+def load_checkpoint(optimizer, scheduler, restore_dir):
+    osd_path = os.path.join(restore_dir, 'optim.bin')
+    if os.path.isfile(osd_path):
+        optimizer.load_state_dict(torch.load(osd_path))
+    ssd_path = os.path.join(restore_dir, 'sched.bin')
+    if os.path.isfile(ssd_path):
+        scheduler.load_state_dict(torch.load(ssd_path))
+    best_val_bleu = 0.
+    for x in os.listdir(restore_dir):
+        if x.startswith('pred_dev'):
+            best_val_bleu = float(x.split('_')[-1].split('.txt')[0])
+    return optimizer, scheduler, best_val_bleu
 
 
-def load_checkpoint(checkpoint, model, optimizer=None):
-    """Loads model parameters (state_dict) from file_path. If optimizer is provided, loads state_dict of
-    optimizer assuming it is present in checkpoint.
-
-    Args:
-        checkpoint: (string) filename which needs to be loaded
-        model: (torch.nn.Module) model for which the parameters are loaded
-        optimizer: (torch.optim) optional: resume optimizer from checkpoint
-    """
-    if not os.path.exists(checkpoint):
-        raise ("File doesn't exist {}".format(checkpoint))
-    checkpoint = torch.load(checkpoint)
-    # model.load_state_dict(checkpoint['state_dict'])
-    model.load_state_dict(checkpoint['state_dict'])
-
-    if optimizer:
-        optimizer.load_state_dict(checkpoint['optim_dict'])
-
-    return checkpoint
-
-
-def lst2str(lst):
-    return ','.join([str(x) for x in lst])
+def save_checkpoint(model, ckpt_dir, optimizer, scheduler):
+    os.mkdir(ckpt_dir)
+    model.save_pretrained(ckpt_dir)
+    torch.save(optimizer.state_dict(), os.path.join(ckpt_dir, 'optim.bin'))
+    torch.save(scheduler.state_dict(), os.path.join(ckpt_dir, 'sched.bin'))
 
 
 def convert_tokens_to_string(tokens):
     """ Converts a sequence of tokens (string) in a single string. """
-    out_string = " ".join(tokens).replace(" ##", "").strip()
-    return out_string
+    return ' '.join(tokens).replace(' ##', '').strip()
 
 
-def tags_to_string(source, labels, context=None, ignore_toks=set(['[SEP]', '[CLS]', '[UNK]', '|', '*']), stop_i=0):
+def filter_spans(starts, ends, max_i, stop_i=0):
+    for i, start in enumerate(starts):
+        end = ends[i]
+        if start == stop_i:
+            starts[:] = starts[:(i + 1)]
+            ends[:] = ends[:(i + 1)]
+            break
+        if start > end or start >= max_i:
+            starts[i] = ends[i] = -1
+            continue
+    starts[:] = [s for s in starts if s > -1]
+    ends[:] = [e for e in ends if e > -1]
+    assert(len(starts) == len(ends))
+    return starts, ends
+
+
+def get_sp_strs(start_lst, end_lst, max_i):
+    starts, ends = filter_spans(start_lst, end_lst, max_i)
+    if not starts:
+        starts.append(0)
+        ends.append(0)
+    starts, ends = dutils.ilst2str(starts), dutils.ilst2str(ends)
+    return starts, ends
+
+
+def tags_to_string(source, labels, context=None, ignore_toks=set(['[SEP]', '[CLS]', '[UNK]', '|', '*'])):
     output_tokens = []
-    if context is None:
-        context = source
     for token, tag in zip(source, labels):
         added_phrase = tag.split("|")[1]
         starts, ends = added_phrase.split("#")[0], added_phrase.split("#")[1]
         starts, ends = starts.split(','), ends.split(',')
         for i, start in enumerate(starts):
             s_i, e_i = int(start), int(ends[i])
-            if s_i == stop_i:
-                break
-            if e_i >= s_i and e_i > 0:
-                add_phrase = [s for s in context[s_i:e_i+1] if s not in ignore_toks]
-                if add_phrase:
-                    output_tokens.extend(add_phrase)
-        if tag.split("|")[0]=="KEEP":
+            add_phrase = [s for s in context[s_i:e_i+1] if s not in ignore_toks]
+            if add_phrase:
+                output_tokens.extend(add_phrase)
+        if tag.split("|")[0] == 'KEEP':
             if token not in ignore_toks:
                 output_tokens.append(token)
+        if len(output_tokens) > len(context):
+            break
 
-    if len(output_tokens)==0:
+    if not output_tokens:
        output_tokens.append("*")
-    elif len(output_tokens) > 1 and output_tokens[-1]=="*":
+    elif len(output_tokens) > 1 and output_tokens[-1] == "*":
        output_tokens = output_tokens[:-1]
     return convert_tokens_to_string(output_tokens)

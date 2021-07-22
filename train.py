@@ -15,6 +15,7 @@ from transformers.models.gpt2.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
 from evaluate import evaluate
 from data_loader import DataLoader
 from sequence_tagger import BertForSequenceTagging
+from utils import load_checkpoint
 
 import transformers
 transformers.logging.set_verbosity(transformers.logging.ERROR)
@@ -30,31 +31,34 @@ def train_epoch(model, rl_model, data_iterator, optimizer, scheduler, params, pa
     one_epoch = trange(params.train_steps)
     for batch in one_epoch:
         batch_data, batch_ref, batch_action, batch_start, batch_end, batch_sp_width, batch_src_idx = next(data_iterator)
-        batch_masks = batch_data.ne(pad_token_id) # get padding mask
+        batch_masks = batch_data.ne(pad_token_id)
 
         model.zero_grad()
         with torch.cuda.amp.autocast():
-            loss = model((batch_data, batch_ref), rl_model, attention_mask=batch_masks,
-                labels_action=batch_action, labels_start=batch_start, labels_end=batch_end, sp_width=batch_sp_width, src_idx=batch_src_idx)[0]
-        scaler.scale(loss).backward()
-
-        scaler.unscale_(optimizer)
-        nn.utils.clip_grad_norm_(parameters=model.parameters(), max_norm=params.clip_grad)
-
-        scaler.step(optimizer)
-        scaler.update()
-        cur_scale = scaler.get_scale()
-        if cur_scale >= prev_scale:  # ensure that scaler called optimizer.step
-            scheduler.step()
-        prev_scale = cur_scale
+            loss = model((batch_data, batch_ref), rl_model,
+                    attention_mask=batch_masks, labels_action=batch_action,
+                    labels_start=batch_start, labels_end=batch_end,
+                    sp_width=batch_sp_width, src_idx=batch_src_idx)[0]
 
         loss_avg.update(loss.item())
-        one_epoch.set_postfix(loss='{:05.3f}'.format(loss_avg()))
+        one_epoch.set_postfix(loss=f'{loss_avg():05.3f}')
+
+        loss /= params.grad_accum_steps
+        scaler.scale(loss).backward()
+        if (batch + 1) % params.grad_accum_steps == 0:
+            scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(parameters=model.parameters(), max_norm=params.clip_grad)
+
+            scaler.step(optimizer)
+            scaler.update()
+            cur_scale = scaler.get_scale()
+            if cur_scale >= prev_scale:  # ensure that scaler called optimizer.step
+                scheduler.step()
+            prev_scale = cur_scale
 
 
-def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, optimizer, scheduler, params, model_dir, cur_epoch):
+def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, optimizer, scheduler, params, model_dir, cur_epoch, best_val_bleu):
     """Train the model and evaluate every epoch."""
-    best_val_bleu = 0.0
     patience_counter = 0
 
     for epoch in range(cur_epoch, params.epoch_num + 1):
@@ -76,7 +80,7 @@ def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, optim
 
         # Evaluate for one epoch on training set and validation set
         params.eval_steps = params.val_steps
-        val_metrics = evaluate(model, rl_model, val_data_iterator, params, epoch, mark='Val', best_val_bleu=best_val_bleu, optimizer=optimizer)
+        val_metrics = evaluate(model, rl_model, val_data_iterator, params, epoch, mark='Val', best_val_bleu=best_val_bleu, optimizer=optimizer, scheduler=scheduler)
         if 'best_val_bleu' in val_metrics:
             best_val_bleu = val_metrics['best_val_bleu']
             patience_counter = 0
@@ -143,17 +147,18 @@ def main(args):
 
     optimizer = AdamW(optimizer_grouped_parameters, lr=params.learning_rate, correct_bias=False)
     cur_epoch = 1
+    train_steps_per_epoch = math.ceil(params.train_size / params.batch_size)
+    num_training_steps = params.epoch_num * train_steps_per_epoch
+    num_warmup_steps = train_steps_per_epoch * params.warmup_epochs
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps, last_epoch=cur_epoch - 2)
+    best_val_bleu = 0.
     if args.restore_dir is not None:
-        osd = torch.load(os.path.join(args.restore_dir, 'optim.bin'))
-        optimizer.load_state_dict(osd)
+        optimizer, scheduler, best_val_bleu = load_checkpoint(optimizer, scheduler, args.restore_dir)
         cur_epoch = int(os.path.basename(os.path.normpath(args.restore_dir))) + 1
-    train_steps_per_epoch = math.ceil(params.train_size // params.batch_size)
-    num_warmup_steps = train_steps_per_epoch * 2
-    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=params.epoch_num * train_steps_per_epoch, last_epoch=cur_epoch - 2)
 
     params.tagger_model_dir = args.model
     logging.info("Starting training for {} epoch(s)".format(params.epoch_num - cur_epoch + 1))
-    train_and_evaluate(model, rl_model, data_loader, train_data, val_data, optimizer, scheduler, params, args.model, cur_epoch)
+    train_and_evaluate(model, rl_model, data_loader, train_data, val_data, optimizer, scheduler, params, args.model, cur_epoch, best_val_bleu)
 
 
 if __name__ == '__main__':
