@@ -26,15 +26,15 @@ def convert_back_tags(pred_action, pred_start, pred_end, true_action, true_start
     for j in range(len(pred_action)):
         pred_tags.append([])
         true_tags.append([])
-        max_i = context_lens[j].item()
+        context_len = context_lens[j].item()
         for i in range(len(pred_action[j])):
             if true_action[j][i] == '-1':
                 continue
 
-            pstarts, pends = get_sp_strs(pred_start[j][i].tolist(), pred_end[j][i].tolist(), max_i)
+            pstarts, pends = get_sp_strs(pred_start[j][i].tolist(), pred_end[j][i].tolist(), context_len)
             pred_tags[-1].append(f'{pred_action[j][i]}|{pstarts}#{pends}')
 
-            tstarts, tends = get_sp_strs(true_start[j][i].tolist(), true_end[j][i].tolist(), max_i)
+            tstarts, tends = get_sp_strs(true_start[j][i].tolist(), true_end[j][i].tolist(), context_len)
             true_tags[-1].append(f'{true_action[j][i]}|{tstarts}#{tends}')
     return pred_tags, true_tags
 

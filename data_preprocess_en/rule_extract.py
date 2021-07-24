@@ -21,7 +21,7 @@ punct_set=set(['!', ',', '?'])
 
 
 class SlottedRule:
-    def __init__(self, tokens, slot_spans, validate=False, mask='_', ignore_trail_punct=True):
+    def __init__(self, tokens, slot_spans, validate=False, mask='_', max_sp_width=3, ignore_trail_punct=True):
         self.tokens = tokens
         self.slot_spans = [(max(0, i), min(i + k, len(self))) for i, k in slot_spans]
         self.n_slots = len(self.slot_spans)
@@ -29,6 +29,7 @@ class SlottedRule:
 
         self.ignore_trail_punct = ignore_trail_punct
         self.mask = mask
+        self.max_sp_width = max_sp_width
         if validate:
             self.validate()
 
@@ -36,13 +37,15 @@ class SlottedRule:
         return len(self.tokens)
 
     def __str__(self):
-        rule_str = f' {self.mask} '.join([' '.join(l) for l in self.term_tokens])
         if len(self.term_spans):
             pref = f'{self.mask} ' if self.term_spans[0][0] > 0 else ''
             suf = f' {self.mask}' if self.term_spans[-1][1] < len(self) else ''
+            n_term_join = self.max_sp_width - int(len(pref) > 0) - int(len(suf) > 0) + 1
+            term_phrs = [' '.join(l) for l in self.term_tokens]
+            rule_str = f' {self.mask} '.join(term_phrs[:n_term_join])
             return f'{pref}{rule_str}{suf}'
         else:
-            return ' '.join([self.mask] * len(self.slot_spans))
+            return ' '.join([self.mask] * min(len(self.slot_spans), self.max_sp_width))
 
     @property
     def slot_tokens(self):
@@ -118,10 +121,14 @@ def read_fs(args):
     with Pool(args.n_proc) as p:
         with open(concat_path(args, 'cpts_tgt.txt'), encoding='utf8') as f:
             cpts_tgt = p.map(fromstring, [l.rstrip() for l in f])
-    ctxs, tgts = [], []
-    for source, target in yield_sources_and_targets(os.path.join(args.data_dir, f'{args.split}.tsv'), args.tsv_fmt):
-        ctxs.append(source[0].split(' [CI] ')[0])
-        tgts.append(target)
+    if args.use_lemma:
+        ctxs, tgts = read_lem(concat_path(args, 'unmatch_lems.json'))
+    else:
+        ctxs, tgts = [], []
+        for source, target in yield_sources_and_targets(os.path.join(
+            args.data_dir, f'{args.split}.tsv'), args.tsv_fmt):
+            ctxs.append(source[0].split(' [CI] ')[0])
+            tgts.append(target)
     cpts_tgt, ctxs, tgts, phrs, phr_tgt_sps = read_expand(concat_path(args,
         'phr_tgt_sps.json'), ctxs=ctxs, tgts=tgts, cpts_tgt=cpts_tgt)
     phr_tgt_sps = [sp for pts in phr_tgt_sps for sp in pts]
@@ -168,6 +175,25 @@ def triu_to_full(triu_dist, nr):
     return dist
 
 
+def group_triu_dist(triu_dist, nr):
+    ret = []
+    lptr = 0
+    for rlen in range(nr - 1, -1, -1):
+        ret.append(np.array(triu_dist[lptr:(lptr + rlen)]))
+        lptr += rlen
+    return ret
+
+
+def thresh_cluster(triu_dist, dist_thresh, nr):
+    triu_dist[:] = group_triu_dist(triu_dist, nr)
+    par = -np.ones(nr, dtype=np.int32)
+    for i in range(1, nr - 1):  # over columns of distance matrix
+        head = np.argmin([triu_dist[j][j - i] for j in range(i)])
+        if triu_dist[head][head - i] <= dist_thresh:
+            par[i] = head
+    return np.where(par < 0, np.arange(nr), par)
+
+
 def main(args):
     phrs, ctxs, tgts, cpts_tgt, phr_tgt_sps = read_fs(args)
     ems = partial(fmatch_single, match_fn=exact_match, tmode='bup')
@@ -180,9 +206,13 @@ def main(args):
         srs = [SlottedRule(phr, get_slot_spans(r)) for phr, r in zip(phrs, res)]
 
     rules, nr = count_rules(srs)
-    rstrs = list(rules.keys())
+    rstrs = list(rules.keys()) if args.cluster_method != 'thresh' else\
+            [t[0] for t in rules.most_common()]
     triu_dist = get_triu_dist(rstrs, nr)
-    if args.cluster_method == 'affinity':
+    if args.cluster_method == 'thresh':
+        dist_thresh = np.percentile(triu_dist, args.perc_q)
+        labels = thresh_cluster(triu_dist, dist_thresh, nr)
+    elif args.cluster_method == 'affinity':
         # https://scikit-learn.org/stable/modules/generated/sklearn.cluster.AffinityPropagation.html
         dist = triu_to_full(triu_dist, nr)
         af = AffinityPropagation(affinity='precomputed', random_state=None).fit(-dist)
@@ -206,10 +236,11 @@ if __name__ == '__main__':
     ap.add_argument('--split', default='train', choices=['train', 'dev', 'test'])
     ap.add_argument('--data_dir', default='canard')
     ap.add_argument('--n_proc', type=int, default=min(4, os.cpu_count()))
+    ap.add_argument('--use_lemma', action='store_true', default=True)
     ap.add_argument('--tsv_fmt', default='wikisplit')
     ap.add_argument('--debug', action='store_true')
     ap.add_argument('--out_f', default='rule_{}.json')
-    ap.add_argument('--perc_q', type=int, default=10, help='For --cluster_method=hierarch: percentile of pairwise distance to bound inter-cluster distance')
-    ap.add_argument('--cluster_method', default='affinity', choices=['affinity', 'hierarch'])
+    ap.add_argument('--perc_q', type=int, default=10, help='For --cluster_method=thresh|hierarch: percentile of pairwise distance to bound inter-cluster distance')
+    ap.add_argument('--cluster_method', default='thresh', choices=['affinity', 'thresh', 'hierarch'])
     args = ap.parse_args()
     main(args)

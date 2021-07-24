@@ -87,11 +87,11 @@ def decode_into_string(source, label_action, label_start, label_end, label_mask,
     stop_i = 0
     if context is None:
         context = source
-    max_i = len(context) - 1
+    context_len = len(context)
     for idx in range(0, len(label_action)):
         st, ed = stop_i, stop_i
         if label_mask[idx]:
-            st, ed = get_sp_strs(label_start[idx], label_end[idx], max_i)
+            st, ed = get_sp_strs(label_start[idx], label_end[idx], context_len)
             action = action_map[label_action[idx]]
         else:
             action = action_map[1]

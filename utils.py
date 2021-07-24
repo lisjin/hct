@@ -134,7 +134,8 @@ def filter_spans(starts, ends, max_i, stop_i=0):
     return starts, ends
 
 
-def get_sp_strs(start_lst, end_lst, max_i):
+def get_sp_strs(start_lst, end_lst, context_len):
+    max_i = context_len - 1
     starts, ends = filter_spans(start_lst, end_lst, max_i)
     if not starts:
         starts.append(0)
