@@ -14,7 +14,7 @@ from scipy.cluster.hierarchy import linkage, fcluster
 from sklearn.cluster import AffinityPropagation
 
 from fmatch_lem import fmatch_single
-from utils import fromstring, read_lem, read_expand, concat_path, write_lst
+from utils import fromstring, read_lem, read_expand, concat_path, write_lst, read_stop_phrs
 from utils_data import filter_sources_and_targets
 
 
@@ -22,15 +22,16 @@ punct_set = set([',', '?', '!'])
 
 
 class SlottedRule:
-    def __init__(self, tokens, orig_tokens, slot_spans, max_sp_width, ignore_trail_punct, mask='_', validate=False):
+    def __init__(self, tokens, orig_tokens, slot_spans, max_sp_width, ignore_trail_punct, mask, validate=False):
         self.tokens = tokens
         self.orig_tokens = orig_tokens
+        self.maybe_remove_punct(ignore_trail_punct)
         self.slot_spans = [(max(0, i), min(i + k, len(self))) for i, k in slot_spans]
         self.n_slots = len(self.slot_spans)
         self.term_spans, self.n_term_spans, self.n_terms = self.get_term(slot_spans)
-
+        if self.n_slots > max_sp_width:
+            self.bound_spans(max_sp_width)
         self.max_sp_width = max_sp_width
-        self.ignore_trail_punct = ignore_trail_punct
         self.mask = mask
         if validate:
             self.validate()
@@ -40,14 +41,27 @@ class SlottedRule:
 
     def __str__(self, use_lemma=True):
         if len(self.term_spans):
-            pref = f'{self.mask} ' if self.term_spans[0][0] > 0 else ''
-            suf = f' {self.mask}' if self.term_spans[-1][1] < len(self) else ''
-            n_term_join = self.max_sp_width - int(len(pref) > 0) - int(len(suf) > 0) + 1
-            term_phrs = [' '.join(l) for l in (self.term_tokens if use_lemma\
-                    else self.term_orig_tokens)]
-            if term_phrs:
-                rule_str = f' {self.mask} '.join(term_phrs[:n_term_join])
-                return f'{pref}{rule_str}{suf}'
+            tptr, sptr = 0, 0
+            tmax, smax = len(self.term_spans), len(self.slot_spans)
+            rule_str = []
+            term_tokens = self.term_tokens if use_lemma else self.term_orig_tokens
+            while tptr < tmax and sptr < smax:
+                if self.slot_spans[sptr][0] < self.term_spans[tptr][0]:
+                    rule_str.append(self.mask)
+                    sptr += 1
+                    while sptr < tmax and self.term_spans[sptr - 1][1] ==\
+                            self.term_spans[sptr][0]:
+                        rule_str.append(self.mask)
+                        sptr += 1
+                else:
+                    rule_str.append(' '.join(term_tokens[tptr]))
+                    tptr += 1
+            if sptr < smax:
+                rule_str.extend([self.mask] * (smax - sptr))
+            elif tptr < tmax:
+                rule_str.extend([' '.join(x) for x in self.term_tokens[tptr:]])
+            rule_str = ' '.join(rule_str)
+            return rule_str
         return ' '.join([self.mask] * min(len(self.slot_spans), self.max_sp_width))
 
     @property
@@ -56,14 +70,29 @@ class SlottedRule:
 
     @property
     def term_tokens(self):
-        ret = self.span_tokens(self.term_spans)
-        if self.ignore_trail_punct and ret and ret[-1][-1] in punct_set:
-            ret[:] = ret[:-1]
-        return ret
+        return self.span_tokens(self.term_spans)
 
     @property
     def term_orig_tokens(self):
         return [self.orig_tokens[s:e] for s, e in self.term_spans]
+
+    def maybe_remove_punct(self, ignore_trail_punct):
+        if ignore_trail_punct and self.tokens and self.tokens[-1] in punct_set:
+            self.tokens[:] = self.tokens[:-1]
+            self.orig_tokens[:] = self.orig_tokens[:-1]
+
+    def bound_spans(self, max_sp_width):
+        self.n_slots = max_sp_width
+        self.slot_spans[:] = self.slot_spans[:self.n_slots]
+        last_slot_i = self.slot_spans[-1][1]
+        for i, ts in enumerate(self.term_spans):
+            if ts[0] == last_slot_i:
+                self.term_spans[:] = self.term_spans[:(i + 1)]
+                break
+        self.n_terms = len(self.term_spans)
+        nt = max(self.term_spans[-1][1] if self.term_spans else 0,
+                self.slot_spans[-1][1] if self.slot_spans else 0)
+        self.tokens[:] = self.tokens[:nt]
 
     def span_tokens(self, spans):
         return [self.tokens[s:e] for s, e in spans]
@@ -135,7 +164,6 @@ def read_fs(args):
             ctxs=ctxs, tgts=tgts, cpts_tgt=cpts_tgt)
     phr_tgt_sps = [sp for pts in phr_tgt_sps for sp in pts]
 
-    tgts_orig = []
     with open(concat_path(args, 'unfound_phrs.json'), encoding='utf8') as f:
         outs_k = set([int(k) for k in json.load(f).keys()])
     tgts_orig = [target for _, _, target in filter_sources_and_targets(
@@ -154,8 +182,8 @@ def count_rules(srs):
     """Rule frequency across data instances.
     Returns:
         rules: Counter object keyed by rule strings
-        rstr_i: NumPy array of size len(srs) with rule strings per data instance
-        rstr2orig: dictionary mapping between lemmatized and original rule
+        rstr_i: Size len(srs) list of rule string indices in rstrs
+        rstrs: List of unique rule strings, sorted by decreasing frequency
         nr: Number of unique rule strings
     """
     rules = Counter()
@@ -165,16 +193,18 @@ def count_rules(srs):
         rstr = str(sr)
         if rstr:
             if rstr not in rules:
-                rstr2orig[rstr] = (len(rstr2orig), sr.__str__(use_lemma=False))
-            rstr_i.append(rstr2orig[rstr][0])
+                rstr2orig[rstr] = sr.__str__(use_lemma=False)
+            rstr_i.append(rstr)
             rules[rstr] += 1
         else:
-            import pdb; pdb.set_trace()
-            rstr_i.append(-1)
+            rstr_i.append('')
     nr = len(rules)
-    rstr2orig = {k: v[1] for k, v in rstr2orig.items()}
     print(f'Found {nr} rules')
-    return rules, np.array(rstr_i), rstr2orig, nr
+
+    rstrs = [t[0] for t in rules.most_common()]  # sort by decreasing frequency
+    rstr2i = {rstr: i for i, rstr in enumerate(rstrs)}
+    rstr_i = np.array([rstr2i.get(rstr, -1) for rstr in rstr_i])
+    return rules, rstr_i, rstrs, rstr2orig, rstr2i, nr
 
 
 def get_triu_dist(rstrs, nr):
@@ -222,27 +252,49 @@ def thresh_cluster(triu_dist, dist_thresh, nr):
     return np.where(par < 0, np.arange(nr), par)
 
 
-def filter_write_clusters(labels, rules, rstrs, rstr_i, rstr2orig, args):
+def get_str_slots(inp_str, mask):
+    return len([c for c in inp_str.split() if c == mask])
+
+
+def get_mask_rep(n_mask, mask):
+    return ' '.join([mask] * n_mask)
+
+
+def filter_write_clusters(srs, labels, rules, rstrs, rstr_i, rstr2orig, rstr2i, args):
     clusters = {}
-    for k, v in enumerate(labels):
-        clusters.setdefault(v, []).append(k)
-    cov = 0.
     nd = sum(rules.values())
-    ri_uniq = []
     thresh_cnt = floor(nd * args.min_rule_prop)
+    n_slots_dct = {}
+    for k, v in enumerate(labels):
+        if v not in n_slots_dct:
+            n_slots_dct[v] = get_str_slots(rstrs[v], args.mask)
+        k_slots = get_str_slots(rstrs[k], args.mask) if k not in n_slots_dct\
+                else n_slots_dct[k]
+        if k_slots != n_slots_dct[v]:
+            v = k if rules[rstrs[k]] >= thresh_cnt or k_slots == 0 else\
+                    rstr2i[get_mask_rep(k_slots, args.mask)]
+            if v not in n_slots_dct:
+                n_slots_dct[v] = k_slots
+        clusters.setdefault(v, []).append(k)
+
+    cov = 0.
+    rstrs_uniq = {}
     for p, clst in clusters.items():
         cur_cov = sum([rules[rstrs[c]] for c in clst])
         if cur_cov >= thresh_cnt:
             cov += cur_cov
-            labels[clst] = len(ri_uniq)
-            ri_uniq.append(p)
+            rstrs_uniq[p] = len(rstrs_uniq)
+            labels[labels == p] = rstrs_uniq[p]
         else:
             clusters[p] = None
-            labels[clst] = -1
+            labels[clst] = rstr2i[get_mask_rep(n_slots_dct[p], args.mask)] if\
+                    n_slots_dct[p] > 0 else -1
     cov /= nd
-    rstrs[:] = [rstr2orig[rstrs[p]] for p in ri_uniq]
-    for i, l in enumerate(labels):
-        rstr_i[rstr_i == i] = l
+
+    for ri in range(len(labels)):
+        rstr_i[rstr_i == ri] = labels[ri]
+    rstrs[:] = [rstr2orig[rstrs[p]] for p in rstrs_uniq.keys()]
+
     print(f'Reduced to {len(rstrs)} rules with {cov:.4f} coverage')
     write_lst(concat_path(args, f'rule_ids_{args.cluster_method}.txt'), rstr_i)
     write_lst(concat_path(args, f'rule_{args.cluster_method}.txt'), rstrs)
@@ -251,13 +303,11 @@ def filter_write_clusters(labels, rules, rstrs, rstr_i, rstr2orig, args):
 def main(args):
     phrs, ctxs, tgts, phrs_orig, cpts_tgt, phr_tgt_sps = read_fs(args)
     ems = partial(fmatch_single, match_fn=exact_match, tmode='bup')
-    sri = partial(SlottedRule, max_sp_width=args.max_sp_width, ignore_trail_punct=args.ignore_trail_punct)
-    with Pool(args.n_proc) as p:
-        res = p.map(ems, phrs, ctxs, cpts_tgt, phr_tgt_sps)
-        srs = p.map(sri, phrs, phrs_orig, [get_slot_spans(r) for r in res])
+    sri = partial(SlottedRule, max_sp_width=args.max_sp_width, ignore_trail_punct=args.ignore_trail_punct, mask=args.mask)
+    res = [ems(*t) for t in list(zip(phrs, ctxs, cpts_tgt, phr_tgt_sps))]
+    srs = [sri(phr, phr_orig, get_slot_spans(r)) for phr, phr_orig, r in zip(phrs, phrs_orig, res)]
 
-    rules, rstr_i, rstr2orig, nr = count_rules(srs)
-    rstrs = [t[0] for t in rules.most_common()]  # sort by decreasing frequency
+    rules, rstr_i, rstrs, rstr2orig, rstr2i, nr = count_rules(srs)
     triu_dist = get_triu_dist(rstrs, nr)
     if args.cluster_method == 'thresh':
         dist_thresh = np.percentile(triu_dist, args.perc_q)
@@ -273,7 +323,7 @@ def main(args):
         dist_thresh = np.percentile(triu_dist, args.perc_q)
         labels = fcluster(Z, t=dist_thresh, criterion='distance')
 
-    filter_write_clusters(labels, rules, rstrs, rstr_i, rstr2orig, args)
+    filter_write_clusters(srs, labels, rules, rstrs, rstr_i, rstr2orig, rstr2i, args)
 
 
 if __name__ == '__main__':
@@ -282,9 +332,10 @@ if __name__ == '__main__':
     ap.add_argument('--data_dir', default='canard')
     ap.add_argument('--n_proc', type=int, default=min(4, os.cpu_count()))
     ap.add_argument('--max_sp_width', type=int, default=3)
+    ap.add_argument('--mask', default='_')
     ap.add_argument('--ignore_trail_punct', type=int, default=1)
-    ap.add_argument('--min_rule_prop', type=float, default=.002)
-    ap.add_argument('--perc_q', type=int, default=10, help='For --cluster_method=thresh|hierarch: percentile of pairwise distance to bound inter-cluster distance')
-    ap.add_argument('--cluster_method', default='thresh', choices=['affinity', 'thresh', 'hierarch'])
+    ap.add_argument('--min_rule_prop', type=float, default=.003)
+    ap.add_argument('--perc_q', type=int, default=10, help='For --cluster_method=thresh|hierarch: pairwise distance percentile for upper-bound on inter-cluster distance')
+    ap.add_argument('--cluster_method', default='affinity', choices=['affinity', 'thresh', 'hierarch'])
     args = ap.parse_args()
     main(args)

@@ -226,7 +226,7 @@ def read_fs(args):
     cpts_tgt, ctxs, _, phrs, phr_tgt_sps = read_expand(concat_path(args, 'phr_tgt_sps.json'),
             ctxs=ctxs, tgts=tgts, cpts_tgt=cpts_tgt)
     phr_tgt_sps = [sp for pts in phr_tgt_sps for sp in pts]
-    stop_phrs = read_stop_phrs(args.stop_phrs_f)[:6]
+    stop_phrs = read_stop_phrs(os.path.join(args.data_dir, 'stop_phrs.txt'))[:6]
     assert(len(phrs) == len(ctxs) == len(phr_tgt_sps) == len(cpts_tgt))
     return phrs, ctxs, cpts_tgt, phr_tgt_sps, stop_phrs
 
@@ -243,7 +243,6 @@ if __name__ == '__main__':
     ap.add_argument('--data_dir', default='canard')
     ap.add_argument('--mmode', default='difflib', choices=['regex', 'difflib'])
     ap.add_argument('--tmode', default='bup', choices=['tdown', 'bup'])
-    ap.add_argument('--stop_phrs_f', default='canard/stop_phrs.txt')
     ap.add_argument('--n_proc', type=int, default=min(4, cpu_count()))
     ap.add_argument('--debug', action='store_true')
     ap.add_argument('--print_found', action='store_true')
