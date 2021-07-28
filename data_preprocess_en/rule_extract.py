@@ -14,7 +14,7 @@ from scipy.cluster.hierarchy import linkage, fcluster
 from sklearn.cluster import AffinityPropagation
 
 from fmatch_lem import fmatch_single
-from utils import fromstring, read_lem, read_expand, concat_path, write_lst, read_stop_phrs
+from utils import fromstring, read_lem, read_expand, concat_path, write_lst
 from utils_data import filter_sources_and_targets
 
 
@@ -22,11 +22,12 @@ punct_set = set([',', '?', '!'])
 
 
 class SlottedRule:
-    def __init__(self, tokens, orig_tokens, slot_spans, max_sp_width, ignore_trail_punct, mask, validate=False):
+    def __init__(self, tokens, orig_tokens, slot_spans, ctx_spans, max_sp_width, ignore_trail_punct, mask, validate=False):
         self.tokens = tokens
         self.orig_tokens = orig_tokens
         self.maybe_remove_punct(ignore_trail_punct)
         self.slot_spans = [(max(0, i), min(i + k, len(self))) for i, k in slot_spans]
+        self.ctx_spans = ctx_spans
         self.n_slots = len(self.slot_spans)
         self.term_spans, self.n_term_spans, self.n_terms = self.get_term(slot_spans)
         if self.n_slots > max_sp_width:
@@ -84,6 +85,7 @@ class SlottedRule:
     def bound_spans(self, max_sp_width):
         self.n_slots = max_sp_width
         self.slot_spans[:] = self.slot_spans[:self.n_slots]
+        self.ctx_spans[:] = self.ctx_spans[:self.n_slots]
         last_slot_i = self.slot_spans[-1][1]
         for i, ts in enumerate(self.term_spans):
             if ts[0] == last_slot_i:
@@ -172,10 +174,6 @@ def read_fs(args):
 
     assert(len(phrs) == len(ctxs) == len(tgts) == len(phrs_orig) == len(phr_tgt_sps) == len(cpts_tgt))
     return phrs, ctxs, tgts, phrs_orig, cpts_tgt, phr_tgt_sps
-
-
-def get_slot_spans(r):
-    return [r2[:2] for r2 in r[1]]
 
 
 def count_rules(srs):
@@ -284,20 +282,29 @@ def filter_write_clusters(srs, labels, rules, rstrs, rstr_i, rstr2orig, rstr2i, 
         if cur_cov >= thresh_cnt:
             cov += cur_cov
             rstrs_uniq[p] = len(rstrs_uniq)
-            labels[labels == p] = rstrs_uniq[p]
+            for c in clst:
+                rstr_i[rstr_i == c] = rstrs_uniq[p]
         else:
             clusters[p] = None
-            labels[clst] = rstr2i[get_mask_rep(n_slots_dct[p], args.mask)] if\
-                    n_slots_dct[p] > 0 else -1
+            for c in clst:
+                rstr_i[rstr_i == c] = rstrs_uniq[rstr2i[get_mask_rep(
+                    n_slots_dct[p], args.mask)]] if n_slots_dct[p] > 0 else -1
     cov /= nd
 
-    for ri in range(len(labels)):
-        rstr_i[rstr_i == ri] = labels[ri]
     rstrs[:] = [rstr2orig[rstrs[p]] for p in rstrs_uniq.keys()]
-
     print(f'Reduced to {len(rstrs)} rules with {cov:.4f} coverage')
-    write_lst(concat_path(args, f'rule_ids_{args.cluster_method}.txt'), rstr_i)
+
+    rule_sps = [(str(ri), *cs) if ri > -1 else None for ri, cs in zip(rstr_i, [sr.ctx_spans for sr in srs])]
+    with open(concat_path(args, f'rule_sps_{args.cluster_method}.json'), 'w', encoding='utf8') as f:
+        json.dump(rule_sps, f)
     write_lst(concat_path(args, f'rule_{args.cluster_method}.txt'), rstrs)
+
+
+def get_spans(r):
+    if not r:
+        return [], []
+    slot_spans, ctx_spans = zip(*[(r2[:2], r2[-1]) for r2 in r])
+    return slot_spans, list(ctx_spans)
 
 
 def main(args):
@@ -305,7 +312,8 @@ def main(args):
     ems = partial(fmatch_single, match_fn=exact_match, tmode='bup')
     sri = partial(SlottedRule, max_sp_width=args.max_sp_width, ignore_trail_punct=args.ignore_trail_punct, mask=args.mask)
     res = [ems(*t) for t in list(zip(phrs, ctxs, cpts_tgt, phr_tgt_sps))]
-    srs = [sri(phr, phr_orig, get_slot_spans(r)) for phr, phr_orig, r in zip(phrs, phrs_orig, res)]
+    _, sps_out, _ = zip(*res)
+    srs = [sri(phr, phr_orig, *get_spans(r)) for phr, phr_orig, r in zip(phrs, phrs_orig, sps_out)]
 
     rules, rstr_i, rstrs, rstr2orig, rstr2i, nr = count_rules(srs)
     triu_dist = get_triu_dist(rstrs, nr)

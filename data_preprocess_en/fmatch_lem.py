@@ -3,17 +3,17 @@ import argparse
 import difflib
 import json
 import numpy as np
+import os
 import regex
 
 from collections import deque
 from functools import partial
 from itertools import chain
 from nltk import Tree
-from os import cpu_count
 from pathos.multiprocessing import ProcessingPool as Pool
 from sacrebleu import sentence_chrf
 
-from utils import eprint, fromstring, read_lem, read_expand, read_stop_phrs, tightest_span, Metrics, concat_path
+from utils import eprint, fromstring, read_lem, read_expand, read_lst, tightest_span, Metrics, concat_path
 
 
 def difflib_match(ctx, phr):
@@ -214,11 +214,11 @@ def fmatch(args):
     n_sps = np.array(n_sps)
     bleu_tup = Metrics.bleu_score(phrs, cands)
     chrfs = np.array([sentence_chrf(' '.join(c), [' '.join(p)]).score if c else 0. for p, c in zip(phrs, cands)])
+
     return (chrfs.mean(), chrfs.std()), (n_sps.mean(), n_sps.std())
 
 
 def read_fs(args):
-    """Returns (phrs, ctxs, tgts, phr tree IDs, unique phr trees, tgt trees)."""
     with Pool(args.n_proc) as p:
         with open(concat_path(args, 'cpts_tgt.txt'), encoding='utf8') as f:
             cpts_tgt = p.map(fromstring, [l.rstrip() for l in f])
@@ -226,7 +226,7 @@ def read_fs(args):
     cpts_tgt, ctxs, _, phrs, phr_tgt_sps = read_expand(concat_path(args, 'phr_tgt_sps.json'),
             ctxs=ctxs, tgts=tgts, cpts_tgt=cpts_tgt)
     phr_tgt_sps = [sp for pts in phr_tgt_sps for sp in pts]
-    stop_phrs = read_stop_phrs(os.path.join(args.data_dir, 'stop_phrs.txt'))[:6]
+    stop_phrs = [x.split() for x in read_lst(os.path.join(args.data_dir, 'stop_phrs.txt'))[:6]]
     assert(len(phrs) == len(ctxs) == len(phr_tgt_sps) == len(cpts_tgt))
     return phrs, ctxs, cpts_tgt, phr_tgt_sps, stop_phrs
 
@@ -243,7 +243,7 @@ if __name__ == '__main__':
     ap.add_argument('--data_dir', default='canard')
     ap.add_argument('--mmode', default='difflib', choices=['regex', 'difflib'])
     ap.add_argument('--tmode', default='bup', choices=['tdown', 'bup'])
-    ap.add_argument('--n_proc', type=int, default=min(4, cpu_count()))
+    ap.add_argument('--n_proc', type=int, default=min(4, os.cpu_count()))
     ap.add_argument('--debug', action='store_true')
     ap.add_argument('--print_found', action='store_true')
     ap.add_argument('--out_f', default='sps_{}_{}.json')

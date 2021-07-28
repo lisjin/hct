@@ -11,7 +11,7 @@ from itertools import chain
 from pathos.multiprocessing import ProcessingPool as Pool
 
 from tagging import EditingTask
-from utils import fromstring, merge_sps, Metrics, write_lst, concat_path
+from utils import fromstring, write_lst, read_lst, concat_path, compute_bleu
 from utils_data import read_label_map, yield_sources_and_targets
 
 
@@ -21,45 +21,35 @@ def get_phrs_add(args):
             cpts_uniq = p.map(fromstring, [l.rstrip() for l in f])
     with open(concat_path(args, 'cpt_ids.txt'), encoding='utf8') as f:
         cids = [list(map(int, l.rstrip().split(','))) for l in f]
-    with open(concat_path(args, args.ctx_sps_f.format(args.mmode, args.tmode))) as f:
+    with open(concat_path(args, args.ctx_sps_f.format(args.cluster_method))) as f:
         ctx_sps = json.load(f)
+    rules = read_lst(concat_path(args, args.rule_f.format(args.cluster_method)))
+
     with open(concat_path(args, 'unfound_phrs.json'), encoding='utf8') as f:
         unfound_phrs = json.load(f)
-
+    rstr_i, ctx_sps = zip(*[(int(x[0]), x[1:]) if x else (-1, None) for x in ctx_sps])
     j = 0
     phrs_add = {}
+    rules_add = {}
     for i, (k, v) in enumerate(unfound_phrs.items()):
         k = int(k)
         phrs_add[k] = []
+        rules_add[k] = []
         for v2 in v['phr']:
             ctx_leaves = list(chain.from_iterable((cpts_uniq[c].leaves() + ['[SEP]'] for c in cids[i])))[:-1]
             phrs_add[k].append([])
-            for t in merge_sps(ctx_sps[j]):
-                if t[1] - t[0]:
-                    cand_phr = ' '.join(ctx_leaves[t[0]:t[1]])
-                    if cand_phr != '[SEP]':
-                        phrs_add[k][-1].append(cand_phr)
+            rules_add[k].append(-1)
+            if rstr_i[j] > -1:
+                rules_add[k][-1] = rstr_i[j]
+                sub_phrs = [' '.join(ctx_leaves[t[0]:t[1]]) for t in ctx_sps[j]]
+                phrs_add[k][-1].extend(sub_phrs)
             j += 1
-    return phrs_add
-
-
-def compute_bleu(hyp_path, refs=None, hyps=None):
-    if refs is None:
-        refs = [target for _, target in yield_sources_and_targets(os.path.join(args.data_dir, f'{args.split}.tsv'), args.tsv_fmt)]
-    if hyps is None:
-        with open(hyp_path, encoding='utf8') as f:
-            hyps = [l.rstrip() for l in f]
-    cov = 0.
-    for i, ref in enumerate(refs):
-        if hyps[i] == ref:
-            cov += 1
-    print(f'EM: {cov / len(refs)}')
-    bleu_tup = Metrics.bleu_score(refs, hyps)
+    return phrs_add, rules_add, rules
 
 
 def proc_examples(args):
     if args.write:
-        phrs_add = get_phrs_add(args)
+        phrs_add, rules_add, rules = get_phrs_add(args)
         snts = []
         tgts = []
     else:
@@ -68,7 +58,7 @@ def proc_examples(args):
     label_map = read_label_map(os.path.join(args.data_out_dir, 'label_map.txt'))
     converter = tagging_converter.TaggingConverter(
             tagging_converter.get_phrase_vocabulary_from_label_map(label_map))
-    builder = bert_example.BertExampleBuilder(label_map, args.vocab_f, args.max_seq_length, args.do_lower_case, converter)
+    builder = bert_example.BertExampleBuilder(label_map, args.vocab_f, args.do_lower_case, converter, rules=rules if args.write else None, mask=args.mask)
     is_train = args.split == 'train'
     num_converted = 0
     tags, sens, cnv_ids = [], [], []
@@ -78,6 +68,7 @@ def proc_examples(args):
                 sources, target,
                 use_arbitrary_target_ids_for_infeasible_examples=not is_train,
                 phrs_new=phrs_add.get(i, []) if args.write else None,
+                rules_new=rules_add.get(i, []) if args.write else None,
                 all_phr=args.all_phr)
         if args.write:  # rewritten source sentence
             snts.append(ret)
@@ -99,7 +90,7 @@ def proc_examples(args):
         write_lst(concat_path(args, 'sentences.txt', data_out=True), sens)
         with open(concat_path(args, 'cnv_ids.json'), 'w') as f:
             json.dump(cnv_ids, f)
-        compute_bleu(hyp_path, tgts, snts)
+        compute_bleu(refs=tgts, hyps=snts)
     else:
         pref = 'all' if args.all_phr else 'unfound'
         with open(concat_path(args, f'{pref}_phrs.json'), 'w', encoding='utf8') as f:
@@ -117,14 +108,17 @@ if __name__ == '__main__':
     ap.add_argument('--data_out_dir', default='canard_out')
     ap.add_argument('--mmode', default='difflib')
     ap.add_argument('--tmode', default='bup')
-    ap.add_argument('--ctx_sps_f', default='sps_{}_{}.json')
+    ap.add_argument('--ctx_sps_f', default='rule_sps_{}.json')
+    ap.add_argument('--rule_f', default='rule_{}.txt')
     ap.add_argument('--hyp_f', default='snts_{}_{}.txt')
     ap.add_argument('--vocab_f', default='uncased_L-12_H-768_A-12/vocab.txt')
     ap.add_argument('--tsv_fmt', default='wikisplit')
     ap.add_argument('--n_proc', type=int, default=min(4, os.cpu_count()))
-    ap.add_argument('--max_seq_length', type=int, default=128)
     ap.add_argument('--do_lower_case', default=False)
     ap.add_argument('--write', action='store_true')
     ap.add_argument('--all_phr', action='store_true')
+    ap.add_argument('--max_sp_width', type=int, default=3)
+    ap.add_argument('--cluster_method', default='affinity', choices=['affinity', 'thresh', 'hierarch'])
+    ap.add_argument('--mask', default='_')
     args = ap.parse_args()
     main(args)

@@ -9,6 +9,7 @@ from nltk import Tree
 
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 from score import Metrics
+from utils_data import yield_sources_and_targets
 
 
 def eprint(*args, **kwargs):
@@ -59,9 +60,9 @@ def read_expand(phr_tgt_sps_f, ctxs=None, tgts=None, cpts_tgt=None):
     return cpts_tgt, ctxs, tgts, phrs, phr_tgt_sps
 
 
-def read_stop_phrs(stop_phrs_f):
-    with open(stop_phrs_f, 'r') as f:
-        return [l.strip().split() for l in f]
+def read_lst(f_name):
+    with open(f_name, 'r', encoding='utf8') as f:
+        return [l.strip() for l in f]
 
 
 def write_lst(f_name, lst):
@@ -136,3 +137,18 @@ def align_phr_tgt(phr_lst, target):
                 break
         sps.append(sp)
     return sps
+
+
+def compute_bleu(refs=None, hyps=None, args=None, hyp_path=None):
+    if refs is None:
+        refs = [target for _, target in yield_sources_and_targets(
+            os.path.join(args.data_dir, f'{args.split}.tsv'), args.tsv_fmt)]
+    if hyps is None:
+        with open(hyp_path, encoding='utf8') as f:
+            hyps = [l.rstrip() for l in f]
+    cov = 0.
+    for i, ref in enumerate(refs):
+        if hyps[i] == ref:
+            cov += 1
+    print(f'EM: {cov / len(refs)}')
+    bleu_tup = Metrics.bleu_score(refs, hyps)

@@ -8,15 +8,21 @@ import utils_data as utils
 
 from typing import Iterable, Mapping, Sequence, Set, Text, Tuple
 
-def tag_to_sequence(tokens, tags, multi_phr=False):
+def tag_to_sequence(tokens, tags, multi_phr=False, rules_in=None, rules=None, mask=None):
     tags = [str(t) for t in tags]
     output_tokens = []
-    for token, tag in zip(tokens, tags):
-        if len(tag.split("|"))>1:
-           output_tokens.append(tag.split("|")[1])
+    for i, (token, tag) in enumerate(zip(tokens, tags)):
+        tag_spl = tag.split('|')
+        if len(tag_spl)>1:
+           output_tokens.append(tag_spl[1])
            if multi_phr:
-             output_tokens[-1] = output_tokens[-1].replace('^', ' ')
-        if tag.split("|")[0]=="KEEP":
+             sub_phrs = output_tokens[-1].split('^')
+             if rules_in[i] > -1:
+               rstr = rules[rules_in[i]]
+               output_tokens[-1] = rstr.replace(mask, '{}').format(*sub_phrs)
+             else:
+               output_tokens[-1] = ' '.join(sub_phrs)
+        if tag_spl[0]=="KEEP":
            output_tokens.append(token)
     return output_tokens
 

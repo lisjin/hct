@@ -55,14 +55,12 @@ class BertExampleBuilder(object):
   """Builder class for BertExample objects."""
 
   def __init__(self, label_map, vocab_file,
-               max_seq_length, do_lower_case,
-               converter):
+               do_lower_case, converter, rules, mask):
     """Initializes an instance of BertExampleBuilder.
 
     Args:
       label_map: Mapping from tags to tag IDs.
       vocab_file: Path to BERT vocabulary file.
-      max_seq_length: Maximum sequence length.
       do_lower_case: Whether to lower case the input text. Should be True for
         uncased models and False for cased models.
       converter: Converter from text targets to tags.
@@ -70,10 +68,19 @@ class BertExampleBuilder(object):
     self._label_map = label_map
     self._tokenizer = tokenization.FullTokenizer(vocab_file,
                                                  do_lower_case=do_lower_case)
-    self._max_seq_length = max_seq_length
     self._converter = converter
     self._pad_id = self._get_pad_id()
     self._keep_tag_id = self._label_map['KEEP']
+    self._delete_tag_id = self._label_map['DELETE']
+    self._swap_tag_id = self._label_map['SWAP']
+    self._rules = rules
+    self._single_rule_id = -1
+    self._mask = mask
+    for i, rule in enumerate(rules):
+      if rule == mask:
+        self._single_rule_id = i
+        break
+    assert(self._single_rule_id > -1)
 
   def build_bert_example(
       self,
@@ -81,6 +88,7 @@ class BertExampleBuilder(object):
       target = None,
       use_arbitrary_target_ids_for_infeasible_examples = False,
       phrs_new = None,
+      rules_new = None,
       all_phr = False
   ):
     """Constructs a BERT Example.
@@ -118,6 +126,7 @@ class BertExampleBuilder(object):
     label_action = []
     start = []
     end = []
+    rule = []
     labels_ = []
     can_convert = True
     if phrs_new is None:
@@ -142,6 +151,7 @@ class BertExampleBuilder(object):
             tags[i].added_phrase = '^'.join(phrs_new[i2])
             start.append(tuple(sts))
             end.append(tuple(ens))
+            rule.append(rules_new[i2])
             can_convert = True
             i2 += 1
           else:
@@ -149,21 +159,24 @@ class BertExampleBuilder(object):
               phrs_read.append(phrase)
             start.append(-1)
             end.append(-1)
+            rule.append(-1)
             can_convert = False
         else:
           start.append(s_ind)
           end.append(s_ind+len(phrase)-1)
+          rule.append(self._single_rule_id)
           if phrs_new is None and all_phr:
             phrs_read.append(phrase)
       else:
         start.append(-1)
         end.append(-1)
+        rule.append(-1)
       if t.split("|")[0]=="KEEP":
-        label_action.append(0)
+        label_action.append(self._keep_tag_id)
       elif t.split("|")[0]=="DELETE":
-        label_action.append(1)
+        label_action.append(self._delete_tag_id)
       else:
-        label_action.append(2)
+        label_action.append(self._swap_tag_id)
       labels_.append(t.split("|")[0])
 
     label_start = []
@@ -186,7 +199,7 @@ class BertExampleBuilder(object):
           else ilst2str(label_start[i])
       end_str = str(label_end[i]) if type(label_end[i]) is int\
           else ilst2str(label_end[i])
-      labels.append(f'{labels_[i]}|{start_str}#{end_str}')
+      labels.append(f'{labels_[i]}|{start_str}#{end_str}|{rule[i]}')
     example = BertExample(
         input_tokens=task.source_tokens+["\t"]+target.split(),
         labels=labels,
@@ -196,8 +209,7 @@ class BertExampleBuilder(object):
         can_convert=can_convert,
         task=task,
         default_label=self._keep_tag_id)
-    #example.pad_to_max_length(self._max_seq_length, self._pad_id)
-    ret = ' '.join(tagging_converter.tag_to_sequence(task.source_tokens, tags, multi_phr=True)[:-1]) if phrs_new is not None else phrs_read
+    ret = ' '.join(tagging_converter.tag_to_sequence(task.source_tokens, tags, multi_phr=True, rules_in=rule, rules=self._rules, mask=self._mask)[:-1]) if phrs_new is not None else phrs_read
     return example, ret
 
   def _get_pad_id(self):
