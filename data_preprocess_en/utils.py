@@ -7,9 +7,9 @@ from functools import partial
 from itertools import chain
 from nltk import Tree
 
+from .utils_data import yield_sources_and_targets
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 from score import Metrics
-from utils_data import yield_sources_and_targets
 
 
 def eprint(*args, **kwargs):

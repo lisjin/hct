@@ -4,6 +4,8 @@ import torch
 import logging
 import numpy as np
 
+from transformers import BertConfig
+
 from data_preprocess_en import utils as dutils
 
 
@@ -166,3 +168,18 @@ def tags_to_string(source, labels, context=None, ignore_toks=set(['[SEP]', '[CLS
     elif len(output_tokens) > 1 and output_tokens[-1] == "*":
        output_tokens = output_tokens[:-1]
     return convert_tokens_to_string(output_tokens)
+
+
+def load_rules(rule_path, mask='_'):
+    with open(rule_path, encoding='utf8') as f:
+        return [None] + [l.strip().replace(mask, '{}') for l in f]
+
+
+def get_config(tokenizer, params, bert_class, bleu_rl):
+    config = BertConfig.from_pretrained(bert_class)
+    config.num_labels = len(params.tag2idx)
+    config.rl_model = 'bleu' if bleu_rl else None
+    config.rl_ratio = params.rl_ratio
+    config.rules = params.rules
+    config.bert_class = bert_class 
+    return config

@@ -8,7 +8,7 @@ from pathos.multiprocessing import ProcessingPool as Pool
 from transformers import BertTokenizer
 
 class DataLoader(object):
-    def __init__(self, data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1):
+    def __init__(self, data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1, rule_pad_idx=-1):
         self.data_dir = data_dir
         self.batch_size = params.batch_size
         self.max_len = params.max_len
@@ -16,6 +16,10 @@ class DataLoader(object):
         self.seed = params.seed
         self.token_pad_idx = token_pad_idx
         self.tag_pad_idx = tag_pad_idx
+        self.rule_pad_idx = rule_pad_idx
+        self.max_sp_len = params.max_sp_len
+        self.to_int = lambda x: int(x) + 1
+        self.tokenizer = BertTokenizer.from_pretrained(bert_class)
 
         tags = self.load_tags()
         self.tag2idx = {tag: idx for idx, tag in enumerate(tags)}
@@ -23,27 +27,24 @@ class DataLoader(object):
         params.tag2idx = self.tag2idx
         params.idx2tag = self.idx2tag
 
-        self.tokenizer = BertTokenizer.from_pretrained(bert_class)
-
-        self.max_sp_len = params.max_sp_len
-        self.to_int = lambda x: int(x) + 1
-
-    def load_tags(self):
+    @staticmethod
+    def load_tags():
         return ["KEEP", "DELETE"]
 
-    def _split_to_wordpieces_span(self, tokens, label_action, label_start, seq_width, label_end):
+    @staticmethod
+    def upd_by_ptr(seq_width, rule_seq, ptr):
+        rem = sw = seq_width[ptr]
+        cur_rule = rule_seq[ptr] + 1
+        return rem, sw, cur_rule
+
+    def _split_to_wordpieces_span(self, tokens, label_action, label_start, label_end, seq_width, rule_seq):
         bert_tokens = []
         bert_label_action = []
-        bert_label_start = []
-        bert_label_end = []
-        bert_seq_width = []
         source_indices = []
-
         cum_num_list = []
         curr_len_list = []
         cum_num = 0
-        src_start = len(tokens)
-        orig_start = len(tokens)
+        src_start = orig_start = len(tokens)
         for i, token in enumerate(tokens):
             if token == '[SEP]':
                 pieces = [token]
@@ -55,15 +56,6 @@ class DataLoader(object):
 
             bert_label_action.extend([label_action[i]] * len(pieces))
             bert_tokens.extend(pieces)
-
-            # bugfix for tokenizer influence on label start and label end
-            # do you know johnson jackson | yes I know him - > yes I know johnson
-            # Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Keep|0-0 Keep|0-0 Keep|0-0 Delete|3-4
-            # do you know john #son jack #son | yes I know him
-            # Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Delete|0-0 Keep|0-0 Keep|0-0 Keep|0-0 Delete|3-6
-            # curr_len_list = [1,1,1,2,2,1,1,1,1,1]
-            # cum_num_list = [0,0,0,0,1,2,2,2,2,2]
-
             curr_len_list.append(len(pieces))
             cum_num_list.append(cum_num)
             cum_num += len(pieces)-1
@@ -76,13 +68,18 @@ class DataLoader(object):
             new_len = src_start
             source_indices = list(range(src_start, len(bert_tokens)))
 
+        bert_label_start = []
+        bert_label_end = []
+        bert_seq_width = []
+        bert_rule = []
         cur_label_start, cur_label_end = [], []
         target_width = sum(seq_width[:orig_start - 1])
         ptr = orig_start
-        rem = sw = seq_width[ptr]
+        rem, sw, cur_rule = self.upd_by_ptr(seq_width, rule_seq, ptr)
         for i in range(target_width, len(label_start)):
             if rem == 0:
                 bert_seq_width.extend([sw] * curr_len_list[ptr])
+                bert_rule.extend([cur_rule] * curr_len_list[ptr])
                 for tup in list(zip(*cur_label_start)):
                     bert_label_start.append(tup)
                 for tup in list(zip(*cur_label_end)):
@@ -92,7 +89,7 @@ class DataLoader(object):
                 ptr += 1
                 if ptr == len(seq_width):
                     break
-                rem = sw = seq_width[ptr]
+                rem, sw, cur_rule = self.upd_by_ptr(seq_width, rule_seq, ptr)
             st, ed = label_start[i], label_end[i]
             start = st + cum_num_list[st] if st < len(cum_num_list) else st
             end = ed + cum_num_list[ed] + curr_len_list[ed] - 1 if ed < len(cum_num_list) else ed
@@ -108,7 +105,7 @@ class DataLoader(object):
                 cur_label_start.append([start] + zeros)
                 cur_label_end.append([end] + zeros)
             rem -= 1
-        return bert_tokens, bert_label_action[src_start:], bert_label_start, bert_label_end, bert_seq_width, source_indices
+        return bert_tokens, bert_label_action[src_start:], bert_label_start, bert_label_end, bert_seq_width, bert_rule, source_indices
 
     def _split_multi_span(self, seq):
         sid = 0
@@ -116,50 +113,42 @@ class DataLoader(object):
         seq_width = [1]
         for si, i in enumerate(seq):
             if ',' in i:
-                slst = list(map(self.to_int, i.split(',')))
-                if len(slst) < self.max_sp_len - 1:
-                    slst = slst[:self.max_sp_len-1] + [sid]
-                else:
-                    slst = slst[:self.max_sp_len]
+                slst = list(map(self.to_int, i.split(',')))[:self.max_sp_len]
                 seq_out.extend(slst)
                 seq_width.append(len(slst))
             else:
                 seq_out.append(self.to_int(i))
-                sw = 1
-                if seq_out[-1] > 0:
-                    seq_out.append(sid)
-                    sw += 1
-                seq_width.append(sw)
+                seq_width.append(1)
         return seq_out, seq_width
 
     def get_sens_tags(self, line):
         line1, line2 = line
         src, tgt = line1.split("\t")
-        tgt = " ".join(tgt.strip().split())
-        tokens = src.strip().split(' ')
-        seq = line2.strip().split(' ')
-        action_seq = [k.split("|")[0] for k in seq]
-        start_seq = [k.split("|")[1].split("#")[0] for k in seq]
-        end_seq = [k.split("|")[1].split("#")[1] for k in seq]
-        action_seq = ['DELETE'] + action_seq
-        action_seq = [self.tag2idx.get(tag) for tag in action_seq]
-        tokens = ['[CLS]'] + tokens
+        tgt = ' '.join(tgt.strip().split())
+        tokens = ['[CLS]'] + src.strip().split(' ')
+
+        action_seq, span_seq, rule_seq = zip(*[x.split('|') for x in\
+                line2.strip().split(' ')])
+        start_seq, end_seq = zip(*[x.split('#') for x in span_seq])
+        action_seq = [self.tag2idx.get(tag) for tag in ('DELETE',) + action_seq]
         start_seq, seq_width = self._split_multi_span(start_seq)
         end_seq, _ = self._split_multi_span(end_seq)
-        bert_tokens, bert_label_action, bert_label_start, bert_label_end, bert_seq_width, src_indices = self._split_to_wordpieces_span(tokens, action_seq, start_seq, seq_width, end_seq)
+        rule_seq = [-1] + list(map(int, rule_seq))
+
+        bert_tokens, bert_label_action, bert_label_start, bert_label_end, bert_seq_width, bert_rule, src_indices = self._split_to_wordpieces_span(tokens, action_seq, start_seq, end_seq, seq_width, rule_seq)
         sentence = self.tokenizer.convert_tokens_to_ids(bert_tokens)
-        return sentence, bert_label_action, bert_label_start, bert_seq_width, bert_label_end, tgt, src_indices
+        return sentence, bert_label_action, bert_label_start, bert_label_end, bert_seq_width, bert_rule, tgt, src_indices
 
     def load_sentences_tags(self, sentences_file, tags_file, d, n_proc=4):
         """Loads sentences and tags from their corresponding files.
         Maps tokens and tags to their indices and stores them in the provided dict d.
         """
-        with open(sentences_file, 'r') as file1:
-            with open(tags_file, 'r') as file2:
-                inp = list(zip(file1.readlines(), file2.readlines()))
-        with Pool(n_proc) as p:
-            out = p.map(self.get_sens_tags, inp)
-        d['data'], d['action'], d['start'], d['sp_width'], d['end'], d['ref'], d['src_idx'] = zip(*out)
+        with open(sentences_file, 'r') as sen_f, open(tags_file, 'r') as tag_f:
+            inp = list(zip(sen_f.readlines(), tag_f.readlines()))
+        #with Pool(n_proc) as p:
+        #    out = p.map(self.get_sens_tags, inp)
+        out = [self.get_sens_tags(x) for x in inp[:100]]
+        d['data'], d['action'], d['start'], d['end'], d['sp_width'], d['rule'], d['ref'], d['src_idx'] = zip(*out)
         d['size'] = len(d['data'])
         assert len(d['data']) == len(d['action'])
 
@@ -231,7 +220,7 @@ class DataLoader(object):
         for i in range(BATCH_NUM):
             # fetch sentences and tags
             batch_max_sp_len = 0
-            sentences, ref, action, start, end, sp_width, src_idx = [], [], [], [], [], [], []
+            sentences, ref, action, start, end, sp_width, rule, src_idx = [], [], [], [], [], [], [], []
             for idx in order[bis[i]:bis[i + 1]]:
                 sentences.append(data['data'][idx])
                 ref.append(data['ref'][idx])
@@ -239,6 +228,7 @@ class DataLoader(object):
                 start.append(data['start'][idx])
                 end.append(data['end'][idx])
                 sp_width.append(data['sp_width'][idx])
+                rule.append(data['rule'][idx])
                 src_idx.append(data['src_idx'][idx])
                 batch_max_sp_len = max(max(sp_width[-1]), batch_max_sp_len)
 
@@ -261,7 +251,8 @@ class DataLoader(object):
             batch_start = self.to_device(self.copy_data_3d(batch_len, max_src_len, start, 0, batch_max_sp_len))
             batch_end = self.to_device(self.copy_data_3d(batch_len, max_src_len, end, 0, batch_max_sp_len))
             batch_sp_width = self.to_device(self.copy_data(batch_len, max_src_len, sp_width, 0), dtype=torch.int)
+            batch_rule = self.to_device(self.copy_data(batch_len, max_src_len, rule, self.rule_pad_idx))
             batch_src_idx = self.to_device(self.copy_data(batch_len, max_src_len, src_idx, self.token_pad_idx))
 
             batch_data = self.to_device(batch_data)
-            yield batch_data, ref, batch_action, batch_start, batch_end, batch_sp_width, batch_src_idx
+            yield batch_data, ref, batch_action, batch_start, batch_end, batch_sp_width, batch_rule, batch_src_idx

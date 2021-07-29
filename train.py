@@ -10,18 +10,17 @@ import torch.nn as nn
 
 from tqdm import trange
 from transformers.optimization import get_linear_schedule_with_warmup, AdamW
-from transformers.models.gpt2.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
 
 from evaluate import evaluate
 from data_loader import DataLoader
 from sequence_tagger import BertForSequenceTagging
-from utils import load_checkpoint
+from utils import load_checkpoint, get_config, load_rules
 
 import transformers
 transformers.logging.set_verbosity(transformers.logging.ERROR)
 
 
-def train_epoch(model, rl_model, data_iterator, optimizer, scheduler, params, pad_token_id):
+def train_epoch(model, data_iterator, optimizer, scheduler, params):
     """Train the model on `steps` batches"""
     model.train()
     loss_avg = utils.RunningAverage()
@@ -30,15 +29,12 @@ def train_epoch(model, rl_model, data_iterator, optimizer, scheduler, params, pa
     prev_scale = scaler.get_scale()
     one_epoch = trange(params.train_steps)
     for batch in one_epoch:
-        batch_data, batch_ref, batch_action, batch_start, batch_end, batch_sp_width, batch_src_idx = next(data_iterator)
-        batch_masks = batch_data.ne(pad_token_id)
+        batch_data, batch_ref, batch_action, batch_start, batch_end, batch_sp_width, batch_rule, batch_src_idx = next(data_iterator)
 
         model.zero_grad()
         with torch.cuda.amp.autocast():
-            loss = model((batch_data, batch_ref), rl_model,
-                    attention_mask=batch_masks, labels_action=batch_action,
-                    labels_start=batch_start, labels_end=batch_end,
-                    sp_width=batch_sp_width, src_idx=batch_src_idx)[0]
+            loss = model((batch_data, batch_ref), batch_action,
+                    batch_start, batch_end, batch_sp_width, batch_rule, batch_src_idx)[0]
 
         loss_avg.update(loss.item())
         one_epoch.set_postfix(loss=f'{loss_avg():05.3f}')
@@ -57,36 +53,24 @@ def train_epoch(model, rl_model, data_iterator, optimizer, scheduler, params, pa
             prev_scale = cur_scale
 
 
-def train_and_evaluate(model, rl_model, data_loader, train_data, val_data, optimizer, scheduler, params, model_dir, cur_epoch, best_val_bleu):
+def train_and_evaluate(model, data_loader, train_data, val_data, optimizer, scheduler, params, model_dir, cur_epoch, best_val_bleu):
     """Train the model and evaluate every epoch."""
     patience_counter = 0
-
+    params.train_steps = math.ceil(params.train_size / params.batch_size)
+    params.eval_steps = math.ceil(params.val_size / params.batch_size)
     for epoch in range(cur_epoch, params.epoch_num + 1):
-        # Run one epoch
         logging.info("Epoch {}/{}".format(epoch, params.epoch_num))
 
-        # Compute number of batches in one epoch
-        params.train_steps = math.ceil(params.train_size / params.batch_size)
-        params.val_steps = math.ceil(params.val_size / params.batch_size)
-
-        # data iterator for training
         train_data_iterator = data_loader.data_iterator(train_data, shuffle=True)
+        train_epoch(model, train_data_iterator, optimizer, scheduler, params)
 
-        # Train for one epoch on training set
-        train_epoch(model, rl_model, train_data_iterator, optimizer, scheduler, params, data_loader.tokenizer.pad_token_id)
-
-        # data iterator for evaluation
         val_data_iterator = data_loader.data_iterator(val_data, shuffle=False)
-
-        # Evaluate for one epoch on training set and validation set
-        params.eval_steps = params.val_steps
-        val_metrics = evaluate(model, rl_model, val_data_iterator, params, epoch, mark='Val', best_val_bleu=best_val_bleu, optimizer=optimizer, scheduler=scheduler)
+        val_metrics = evaluate(model, val_data_iterator, params, epoch, mark='Val', best_val_bleu=best_val_bleu, optimizer=optimizer, scheduler=scheduler)
         if 'best_val_bleu' in val_metrics:
             best_val_bleu = val_metrics['best_val_bleu']
             patience_counter = 0
         else:
             patience_counter += 1
-        params.eval_steps = params.val_steps
 
         # Early stopping and logging best BLEU
         if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
@@ -104,11 +88,11 @@ def main(args):
     params.seed = args.seed
     random.seed(args.seed)
     torch.manual_seed(args.seed)
+    params.rules = load_rules(args.rule_path)
     utils.set_logger(os.path.join(args.model, 'train.log'))
 
-    data_dir = 'data_preprocess_en/' + args.dataset
     bert_class = params.bert_class
-    data_loader = DataLoader(data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1)
+    data_loader = DataLoader(args.dataset, bert_class, params)
     train_data = data_loader.load_data('train')
     val_data = data_loader.load_data('dev')
     params.train_size = train_data['size']
@@ -118,18 +102,10 @@ def main(args):
     if args.restore_dir is not None:
         logging.info(f'Restoring model from {args.restore_dir}')
         bert_class = args.restore_dir
-    model = BertForSequenceTagging.from_pretrained(bert_class, num_labels=len(params.tag2idx), pad_token_id=data_loader.tokenizer.pad_token_id)
-    model.to(params.device)
 
-    if args.gpt_rl:
-        print("Using GPT2 PPL as the rewards for RL training!")
-        rl_model = GPT2LMHeadModel.from_pretrained("./dialogue_model/")
-        rl_model.to(params.device)
-        rl_model.eval()
-    elif args.bleu_rl:
-        rl_model = 'bleu'
-    else:
-        rl_model = None
+    config = get_config(data_loader.tokenizer, params, bert_class, args.bleu_rl)
+    model = BertForSequenceTagging.from_pretrained(bert_class, config=config)
+    model.to(params.device)
 
     # Prepare optimizer
     if params.full_finetuning:
@@ -158,15 +134,15 @@ def main(args):
 
     params.tagger_model_dir = args.model
     logging.info("Starting training for {} epoch(s)".format(params.epoch_num - cur_epoch + 1))
-    train_and_evaluate(model, rl_model, data_loader, train_data, val_data, optimizer, scheduler, params, args.model, cur_epoch, best_val_bleu)
+    train_and_evaluate(model, data_loader, train_data, val_data, optimizer, scheduler, params, args.model, cur_epoch, best_val_bleu)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', default='acl19', help="Directory containing the dataset")
+    parser.add_argument('--rule_path', help='Path to phrase rules for first-level decoder')
     parser.add_argument('--model', default='acl19/w_bleu_rl_transfer_token_bugfix', help="Directory containing the model")
     parser.add_argument('--gpu', default='0', help="gpu device")
-    parser.add_argument('--gpt_rl', dest='gpt_rl', action='store_true', default=False, help="if use the gpt2 model for RL")
     parser.add_argument('--bleu_rl', action='store_true')
     parser.add_argument('--seed', type=int, default=2020, help="random seed for initialization")
     parser.add_argument('--restore_dir', default=None,

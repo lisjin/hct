@@ -20,7 +20,7 @@ cc = SmoothingFunction()
 from utils import tags_to_string
 from multi_headed_additive_attn import MultiHeadedAttention
 
-# span classifier based on self-attention
+
 class SpanClassifier(nn.Module):
     def __init__(self, hidden_dim, max_relative_position, dropout=0.1):
         super(SpanClassifier, self).__init__()
@@ -104,57 +104,61 @@ class BertForSequenceTagging(BertPreTrainedModel):
     def __init__(self, config):
         super(BertForSequenceTagging, self).__init__(config)
         self.num_labels = config.num_labels
+        self.rules = config.rules
+        self.num_rules = len(self.rules)
 
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.rule_classifier = nn.Linear(config.hidden_size, self.num_rules)
+        self.span_classifier = SpanClassifier(config.hidden_size, 0.)
 
-        self.span_classifier = SpanClassifier(config.hidden_size, 0.0)
-        self._rl_ratio = 0.5
-        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.rl_model = config.rl_model
+        self.rl_ratio = config.rl_ratio
+        self.tokenizer = BertTokenizer.from_pretrained(config.bert_class)
         self.pad_token_id = config.pad_token_id
+        self.loss_fn = CrossEntropyLoss()
         self.bleu_fn = partial(sentence_bleu, weights=(.25,) * 4,
                 smoothing_function=cc.method3)
 
         self.init_weights()
 
-    def forward(self, input_data, rl_model, attention_mask, labels_action,
-            labels_start, labels_end, sp_width, src_idx):
+    def forward(self, input_data, labels_action, labels_start, labels_end,
+            sp_width, rule, src_idx):
         input_ids, input_ref = input_data
-        outputs = self.bert(input_ids, attention_mask=attention_mask)
-        seq_output = outputs[0]
+        attention_mask = input_ids.ne(self.pad_token_id)
+        seq_output = self.bert(input_ids, attention_mask=attention_mask)[0]
         src_mask = src_idx.ne(self.pad_token_id)
         src_output = seq_output.gather(1, src_idx.unsqueeze(2).expand(-1, -1,
             seq_output.shape[2])) * src_mask.unsqueeze(2).to(seq_output.dtype)
         src_idx = input_ids.gather(1, src_idx) * src_mask.long()
 
-        logits = self.classifier(src_output) #[bs, seq, 2]
-
         max_sp_len = labels_start.shape[-1]
-        start_dist, end_dist, sp_loss_mask = self.span_classifier(seq_output, sp_width, max_sp_len, attention_mask, src_output, src_mask)
+        start_dist, end_dist, sp_loss_mask = self.span_classifier(seq_output,
+                sp_width, max_sp_len, attention_mask, src_output, src_mask)
         sp_loss_mask = sp_loss_mask.float()
         start_outputs = start_dist.argmax(dim=-1)
         end_outputs = end_dist.argmax(dim=-1)
 
         loss_span = span_loss(start_dist, end_dist, labels_start, labels_end, sp_loss_mask)
 
-        loss_fn = CrossEntropyLoss()
+        logits = self.classifier(src_output)
         act_loss_mask = labels_action.gt(-1)
-        active_loss = act_loss_mask.view(-1)
-        active_logits = logits.view(-1, self.num_labels)[active_loss]
-        active_labels = labels_action.view(-1)[active_loss]
-        loss = loss_fn(active_logits, active_labels) + loss_span
+        loss_action = self.get_active_loss(act_loss_mask, logits, labels_action, self.num_labels)
+        rule_logits = self.rule_classifier(src_output)
+        rule_loss_mask = rule.gt(-1)
+        loss_rule = self.get_active_loss(rule_loss_mask, rule_logits, rule, self.num_rules)
+        loss = loss_action + loss_rule + loss_span
 
-        if rl_model is not None:
-            loss_rl = self.apply_rl(logits, start_dist, end_dist, start_outputs,
-                    end_outputs, src_idx, input_ids, attention_mask, act_loss_mask, sp_loss_mask, input_ref, max_sp_len)
-            loss = (1. - self._rl_ratio) * loss + self._rl_ratio * loss_rl
+        if self.rl_model is not None:
+            loss_rl = self.apply_rl(logits, rule_logits, start_dist, end_dist, start_outputs, end_outputs, src_idx, input_ids, attention_mask, rule_loss_mask, act_loss_mask, sp_loss_mask, input_ref, max_sp_len)
+            loss = (1. - self.rl_ratio) * loss + self.rl_ratio * loss_rl
 
         outputs = (loss, logits, start_outputs, end_outputs)
-        return outputs  # (loss), scores
+        return outputs
 
-    def apply_rl(self, logits, start_dist, end_dist, start_outputs, end_outputs,
-            src_idx, ctx_idx, attention_mask, act_loss_mask, sp_loss_mask, input_ref, max_sp_len, perm=(0, 2, 1, 3)):
+    def apply_rl(self, logits, rule_logits, start_dist, end_dist, start_outputs, end_outputs,
+            src_idx, ctx_idx, attention_mask, act_loss_mask, rule_loss_mask, sp_loss_mask, input_ref, max_sp_len, perm=(0, 2, 1, 3)):
         samples_action = Categorical(logits=logits).sample() # [bs, seq]
         samples_action_prob = torch.gather(logits, 2, samples_action.unsqueeze(dim=2)) #[bs, seq_len, 1]
         greedy_action = logits.argmax(dim=-1) # [bs, seq]
@@ -198,6 +202,12 @@ class BertForSequenceTagging(BertPreTrainedModel):
 
         loss_rl = loss_action_rl + loss_st_rl + loss_ed_rl
         return loss_rl
+
+    def get_active_loss(self, loss_mask, logits, labels, num_labels):
+        active_loss = loss_mask.view(-1)
+        active_logits = logits.view(-1, num_labels)[active_loss]
+        active_labels = labels.view(-1)[active_loss]
+        return self.loss_fn(active_logits, active_labels)
 
     @staticmethod
     def rl_loss(prob, mask, rewards):
