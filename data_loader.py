@@ -7,6 +7,7 @@ import numpy as np
 from pathos.multiprocessing import ProcessingPool as Pool
 from transformers import BertTokenizer
 
+
 class DataLoader(object):
     def __init__(self, data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1, rule_pad_idx=-1):
         self.data_dir = data_dir
@@ -15,17 +16,14 @@ class DataLoader(object):
         self.device = params.device
         self.seed = params.seed
         self.token_pad_idx = token_pad_idx
-        self.tag_pad_idx = tag_pad_idx
+        self.tag_pad_idx = params.pad_tag_id = tag_pad_idx
         self.rule_pad_idx = rule_pad_idx
         self.max_sp_len = params.max_sp_len
         self.to_int = lambda x: int(x) + 1
         self.tokenizer = BertTokenizer.from_pretrained(bert_class)
 
-        tags = self.load_tags()
-        self.tag2idx = {tag: idx for idx, tag in enumerate(tags)}
-        self.idx2tag = {idx: tag for idx, tag in enumerate(tags)}
-        params.tag2idx = self.tag2idx
-        params.idx2tag = self.idx2tag
+        self.idx2tag = params.idx2tag = self.load_tags()
+        self.tag2idx = params.tag2idx = {tag: idx for idx, tag in enumerate(self.idx2tag)}
 
     @staticmethod
     def load_tags():
@@ -145,9 +143,8 @@ class DataLoader(object):
         """
         with open(sentences_file, 'r') as sen_f, open(tags_file, 'r') as tag_f:
             inp = list(zip(sen_f.readlines(), tag_f.readlines()))
-        #with Pool(n_proc) as p:
-        #    out = p.map(self.get_sens_tags, inp)
-        out = [self.get_sens_tags(x) for x in inp[:100]]
+        with Pool(n_proc) as p:
+            out = p.map(self.get_sens_tags, inp)
         d['data'], d['action'], d['start'], d['end'], d['sp_width'], d['rule'], d['ref'], d['src_idx'] = zip(*out)
         d['size'] = len(d['data'])
         assert len(d['data']) == len(d['action'])

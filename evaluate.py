@@ -19,22 +19,18 @@ from sequence_tagger import BertForSequenceTagging
 from utils import tags_to_string, get_sp_strs, save_checkpoint, set_logger, Params, RunningAverage, load_rules
 
 
-def convert_back_tags(pred_action, pred_start, pred_end, true_action, true_start, true_end, context_lens):
+def convert_back_tags(pred_action, pred_rule, pred_start, pred_end, true_action, true_rule, true_start, true_end, context_lens):
     pred_tags = []
     true_tags = []
-    for j in range(len(pred_action)):
+    for i in range(len(pred_action)):
         pred_tags.append([])
         true_tags.append([])
-        context_len = context_lens[j].item()
-        for i in range(len(pred_action[j])):
-            if true_action[j][i] == '-1':
-                continue
+        for j in range(len(pred_action[i])):
+            pstarts, pends = get_sp_strs(pred_start[i][j].tolist(), pred_end[i][j].tolist(), context_lens[j])
+            pred_tags[-1].append(f'{pred_action[i][j]}|{pstarts}#{pends}|{pred_rule[i][j]}')
 
-            pstarts, pends = get_sp_strs(pred_start[j][i].tolist(), pred_end[j][i].tolist(), context_len)
-            pred_tags[-1].append(f'{pred_action[j][i]}|{pstarts}#{pends}')
-
-            tstarts, tends = get_sp_strs(true_start[j][i].tolist(), true_end[j][i].tolist(), context_len)
-            true_tags[-1].append(f'{true_action[j][i]}|{tstarts}#{tends}')
+            tstarts, tends = get_sp_strs(true_start[i][j].tolist(), true_end[i][j].tolist(), context_lens[j])
+            true_tags[-1].append(f'{true_action[i][j]}|{tstarts}#{tends}|{true_rule[i][j]}')
     return pred_tags, true_tags
 
 
@@ -53,69 +49,65 @@ def evaluate(model, data_iterator, params, epoch, mark='Eval', verbose=False, be
     model.eval()
 
     idx2tag = params.idx2tag
-    true_action_tags = []
-    pred_action_tags = []
-    true_start_tags = []
-    pred_start_tags = []
-    true_end_tags = []
-    pred_end_tags = []
-
+    true_action_tags, pred_action_tags = [], []
+    true_rule_tags, pred_rule_tags = [], []
+    true_start_tags, pred_start_tags = [], []
+    true_end_tags, pred_end_tags = [], []
+    ctx_tokens, ctx_lens = [], []
+    src_tokens, src_lens = [], []
+    references = []
     loss_avg = RunningAverage()
 
-    ctx_tokens = []
-    src_tokens = []
-    references = []
-    ctx_lens = []
-
     for _ in range(params.eval_steps):
-        # fetch the next evaluation batch
         batch_data, batch_ref, batch_action, batch_start, batch_end, batch_sp_width, batch_rule, batch_src_idx = next(data_iterator)
         with torch.no_grad():
-            output = model((batch_data, batch_ref), batch_action, batch_start,
+            loss, logits, rule_logits, start_logits, end_logits = model((batch_data, batch_ref), batch_action, batch_start,
                     batch_end, batch_sp_width, batch_rule, batch_src_idx)
-        loss = output[0]
         loss_avg.update(loss.item())
 
         ctx_tokens.extend(batch_data)
         src_tokens.extend(batch_src_idx)
         references.extend(batch_ref)
-        ctx_lens.extend(batch_data.ne(model.pad_token_id).long().sum(-1))
+        src_lens.extend(batch_src_idx.ne(model.pad_token_id).long().sum(-1).tolist())
+        ctx_lens.extend(batch_data.ne(model.pad_token_id).long().sum(-1).tolist())
 
-        batch_action_output, batch_action = eval_to_cpu(output[1], batch_action)
-        batch_start_output, batch_start = eval_to_cpu(output[2], batch_start)
-        batch_end_output, batch_end = eval_to_cpu(output[3], batch_end)
+        batch_action_output, batch_action = eval_to_cpu(logits, batch_action)
+        batch_rule_output, batch_rule = eval_to_cpu(rule_logits, batch_rule)
+        batch_start_output, batch_start = eval_to_cpu(start_logits, batch_start)
+        batch_end_output, batch_end = eval_to_cpu(end_logits, batch_end)
 
-        pred_action_tags.extend([[idx2tag.get(idx) for idx in indices] for indices in np.argmax(batch_action_output, axis=2)])
-        true_action_tags.extend([[idx2tag.get(idx) if idx != -1 else '-1' for idx in indices] for indices in batch_action])
+        batch_action_output = np.argmax(batch_action_output, axis=2)
+        batch_rule_output = np.argmax(batch_rule_output, axis=2)
+        for i, cur_len in enumerate(src_lens[-batch_action.shape[0]:]):
+            pred_action_tags.append([idx2tag[x] for x in batch_action_output[i, :cur_len]])
+            true_action_tags.append([idx2tag[x] for x in batch_action[i, :cur_len]])
+            pred_rule_tags.append(batch_rule_output[i, :cur_len])
+            true_rule_tags.append(batch_rule[i, :cur_len])
+            pred_start_tags.append(batch_start_output[i, :cur_len])
+            true_start_tags.append(batch_start[i, :cur_len])
+            pred_end_tags.append(batch_end_output[i, :cur_len])
+            true_end_tags.append(batch_end[i, :cur_len])
 
-        pred_start_tags.extend([indices for indices in batch_start_output])
-        true_start_tags.extend([indices for indices in batch_start])
+    pred_tags, true_tags = convert_back_tags(pred_action_tags, pred_rule_tags,
+            pred_start_tags, pred_end_tags, true_action_tags, true_rule_tags,
+            true_start_tags, true_end_tags, ctx_lens)
+    assert len(pred_tags) == len(true_tags)
 
-        pred_end_tags.extend([indices for indices in batch_end_output])
-        true_end_tags.extend([indices for indices in batch_end])
-
-    pred_tags, true_tags = convert_back_tags(pred_action_tags, pred_start_tags,
-            pred_end_tags, true_action_tags, true_start_tags, true_end_tags,
-            ctx_lens)
     ctx, src = [], []
     for i in range(len(ctx_tokens)):
         ctx.append(model.tokenizer.convert_ids_to_tokens(ctx_tokens[i].tolist()))
         src.append([ctx[-1][x] for x in src_tokens[i]])
 
     hypo = []
-    for i in range(len(pred_tags)):
-        ctx_len = ctx_tokens[i].ne(model.pad_token_id).long().sum()
-        context = ctx[i][:ctx_len]
-        source = src[i][:len(pred_tags[i])]
-        pred = tags_to_string(source, pred_tags[i], context=context).strip()
+    for i, src_len in enumerate(src_lens):
+        context = ctx[i][:ctx_lens[i]]
+        source = src[i][:src_len]
+        pred = tags_to_string(source, pred_tags[i], model.rules, model.rule_slot_cnts, context=context).strip()
         hypo.append(pred.lower())
-
-    assert len(pred_tags) == len(true_tags)
 
     for i in range(len(pred_tags)):
         assert len(pred_tags[i]) == len(true_tags[i])
 
-    # logging loss, f1 and report
     metrics = {}
     bleu1, bleu2, bleu3, bleu4 = Metrics.bleu_score(references, hypo)
     ckpt_dir = os.path.join(params.tagger_model_dir, f'{epoch:02d}')
@@ -130,16 +122,9 @@ def evaluate(model, data_iterator, params, epoch, mark='Eval', verbose=False, be
             save_checkpoint(model, ckpt_dir, optimizer, scheduler)
             write_pred(ckpt_dir, hypo, epoch, bleu4)
             metrics['best_val_bleu'] = bleu4
-    em_score = Metrics.em_score(references, hypo)
-    rouge1, rouge2, rougel = Metrics.rouge_score(references, hypo)
-    metrics['bleu1'] = bleu1
-    metrics['bleu2'] = bleu2
-    metrics['bleu3'] = bleu3
-    metrics['bleu4'] = bleu4
-    metrics['rouge1'] = rouge1
-    metrics['rouge2'] = rouge2
-    metrics['rouge-L'] = rougel
-    metrics['em_score'] = em_score
+    metrics['em_score'] = Metrics.em_score(references, hypo)
+    metrics['rouge1'], metrics['rouge2'], metrics['rouge-L'] = Metrics.rouge_score(references, hypo)
+    metrics['bleu1'], metrics['bleu2'], metrics['bleu3'], metrics['bleu4'] = bleu1, bleu2, bleu3, bleu4
 
     metrics['loss'] = loss_avg()
     metrics['f1'] = f1_score(true_tags, pred_tags)
@@ -171,8 +156,8 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     params.seed = args.seed
     params.batch_size = 1
-    params.rules = load_rules(args.rule_path)
     bert_class = params.bert_class
+    params.rules, params.rule_slot_cnts = load_rules(args.rule_path)
 
     set_logger(os.path.join(args.model, 'evaluate.log'))
     logging.info("Loading the dataset...")

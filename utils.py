@@ -123,15 +123,11 @@ def convert_tokens_to_string(tokens):
 def filter_spans(starts, ends, max_i, stop_i=0):
     for i, start in enumerate(starts):
         end = ends[i]
-        if start == stop_i:
-            starts[:] = starts[:(i + 1)]
-            ends[:] = ends[:(i + 1)]
-            break
-        if start > end or start >= max_i:
+        if start == stop_i or start > end or start >= max_i:
             starts[i] = ends[i] = -1
             continue
-    starts[:] = [s for s in starts if s > -1]
-    ends[:] = [e for e in ends if e > -1]
+    starts = [s for s in starts if s > -1]
+    ends = [e for e in ends if e > -1]
     assert(len(starts) == len(ends))
     return starts, ends
 
@@ -146,33 +142,43 @@ def get_sp_strs(start_lst, end_lst, context_len):
     return starts, ends
 
 
-def tags_to_string(source, labels, context=None, ignore_toks=set(['[SEP]', '[CLS]', '[UNK]', '|', '*'])):
+def tags_to_string(source, labels, rules, rule_slot_cnts, context=None, ignore_toks=set(['[SEP]', '[CLS]', '[UNK]', '|', '*'])):
     output_tokens = []
     for token, tag in zip(source, labels):
-        added_phrase = tag.split("|")[1]
-        starts, ends = added_phrase.split("#")[0], added_phrase.split("#")[1]
-        starts, ends = starts.split(','), ends.split(',')
+        action, added_phrase, rule_id = tag.split('|')
+        rule_id = int(rule_id)
+        slot_cnt = rule_slot_cnts[rule_id]
+        starts, ends = added_phrase.split("#")
+        starts, ends = map(lambda x: x.split(','), (starts, ends))
+        sub_phrs = []
         for i, start in enumerate(starts):
             s_i, e_i = int(start), int(ends[i])
-            add_phrase = [s for s in context[s_i:e_i+1] if s not in ignore_toks]
+            add_phrase = ' '.join([s for s in context[s_i:e_i+1] if s not in ignore_toks])
             if add_phrase:
-                output_tokens.extend(add_phrase)
-        if tag.split("|")[0] == 'KEEP':
+                sub_phrs.append(add_phrase)
+                if len(sub_phrs) == slot_cnt:
+                    break
+        sub_phrs.extend([''] * (slot_cnt - len(sub_phrs)))
+        phr_toks = rules[rule_id].format(*sub_phrs).strip().split()
+        output_tokens.extend(phr_toks)
+        if action == 'KEEP':
             if token not in ignore_toks:
                 output_tokens.append(token)
         if len(output_tokens) > len(context):
             break
 
     if not output_tokens:
-       output_tokens.append("*")
-    elif len(output_tokens) > 1 and output_tokens[-1] == "*":
+       output_tokens.append('*')
+    elif len(output_tokens) > 1 and output_tokens[-1] == '*':
        output_tokens = output_tokens[:-1]
     return convert_tokens_to_string(output_tokens)
 
 
 def load_rules(rule_path, mask='_'):
     with open(rule_path, encoding='utf8') as f:
-        return [None] + [l.strip().replace(mask, '{}') for l in f]
+        rules = [''] + [l.strip().replace(mask, '{}') for l in f]
+    rule_slot_cnts = [sum(int(y == '{}') for y in x.split()) for x in rules]
+    return rules, rule_slot_cnts
 
 
 def get_config(tokenizer, params, bert_class, bleu_rl):
@@ -181,5 +187,8 @@ def get_config(tokenizer, params, bert_class, bleu_rl):
     config.rl_model = 'bleu' if bleu_rl else None
     config.rl_ratio = params.rl_ratio
     config.rules = params.rules
-    config.bert_class = bert_class 
+    config.rule_slot_cnts = params.rule_slot_cnts
+    config.tags = params.idx2tag
+    config.pad_tag_id = params.pad_tag_id
+    config.bert_class = bert_class
     return config

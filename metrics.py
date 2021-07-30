@@ -140,7 +140,6 @@ def f1_score(y_true, y_pred, average='macro', digits=2, suffix=False):
     #pred_entities = set(get_entities(y_pred, suffix))
 
     if average == 'micro':
-
         if any(isinstance(s, list) for s in y_true):
             y_true = [item for sublist in y_true for item in sublist]
         if any(isinstance(s, list) for s in y_pred):
@@ -153,8 +152,8 @@ def f1_score(y_true, y_pred, average='macro', digits=2, suffix=False):
         nb_pred = len(pred_entities)
         nb_true = len(true_entities)
 
-        p = 100 * nb_correct / nb_pred if nb_pred > 0 else 0
-        r = 100 * nb_correct / nb_true if nb_true > 0 else 0
+        p = nb_correct / nb_pred if nb_pred > 0 else 0
+        r = nb_correct / nb_true if nb_true > 0 else 0
         score = 2 * p * r / (p + r) if p + r > 0 else 0
 
         return score
@@ -172,8 +171,8 @@ def f1_score(y_true, y_pred, average='macro', digits=2, suffix=False):
             nb_pred = len(pred_entities)
             nb_true = len(true_entities)
 
-            pre = 100 * nb_correct / nb_pred if nb_pred > 0 else 0
-            re = 100 * nb_correct / nb_true if nb_true > 0 else 0
+            pre = nb_correct / nb_pred if nb_pred > 0 else 0
+            re = nb_correct / nb_true if nb_true > 0 else 0
             f = 2 * pre * re / (pre + re) if pre + re > 0 else 0
 
             p += pre
@@ -212,8 +211,7 @@ def accuracy_score(y_true, y_pred):
     nb_true = len(y_true)
 
     score = nb_correct / nb_true
-
-    return score*100
+    return score
 
 
 def classification_report(y_true, y_pred, digits=2, suffix=False):

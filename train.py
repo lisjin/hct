@@ -88,7 +88,6 @@ def main(args):
     params.seed = args.seed
     random.seed(args.seed)
     torch.manual_seed(args.seed)
-    params.rules = load_rules(args.rule_path)
     utils.set_logger(os.path.join(args.model, 'train.log'))
 
     bert_class = params.bert_class
@@ -97,6 +96,7 @@ def main(args):
     val_data = data_loader.load_data('dev')
     params.train_size = train_data['size']
     params.val_size = val_data['size']
+    params.rules, params.rule_slot_cnts = load_rules(args.rule_path)
 
     # Prepare model
     if args.restore_dir is not None:

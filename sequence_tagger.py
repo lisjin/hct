@@ -79,45 +79,29 @@ def clip_and_normalize(word_probs, epsilon):
     return word_probs / word_probs.sum(dim=-1, keepdim=True)
 
 
-def decode_into_string(source, label_action, label_start, label_end, label_mask,
-        context=None):
-    assert len(source) == len(label_action)
-    labels = []
-    action_map = {0:"KEEP", 1:"DELETE"}
-    stop_i = 0
-    if context is None:
-        context = source
-    context_len = len(context)
-    for idx in range(0, len(label_action)):
-        st, ed = stop_i, stop_i
-        if label_mask[idx]:
-            st, ed = get_sp_strs(label_start[idx], label_end[idx], context_len)
-            action = action_map[label_action[idx]]
-        else:
-            action = action_map[1]
-        labels.append(f'{action}|{st}#{ed}')
-    output_tokens = tags_to_string(source, labels, context=context)
-    return convert_tokens_to_string(output_tokens)
-
-
 class BertForSequenceTagging(BertPreTrainedModel):
     def __init__(self, config):
         super(BertForSequenceTagging, self).__init__(config)
+        self.tokenizer = BertTokenizer.from_pretrained(config.bert_class)
+        self.pad_token_id = config.pad_token_id
+
+        self.tags = config.tags
+        self.pad_tag_id = config.pad_tag_id
         self.num_labels = config.num_labels
+
         self.rules = config.rules
+        self.rule_slot_cnts = config.rule_slot_cnts
         self.num_rules = len(self.rules)
 
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.loss_fn = CrossEntropyLoss()
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         self.rule_classifier = nn.Linear(config.hidden_size, self.num_rules)
         self.span_classifier = SpanClassifier(config.hidden_size, 0.)
 
         self.rl_model = config.rl_model
         self.rl_ratio = config.rl_ratio
-        self.tokenizer = BertTokenizer.from_pretrained(config.bert_class)
-        self.pad_token_id = config.pad_token_id
-        self.loss_fn = CrossEntropyLoss()
         self.bleu_fn = partial(sentence_bleu, weights=(.25,) * 4,
                 smoothing_function=cc.method3)
 
@@ -133,61 +117,51 @@ class BertForSequenceTagging(BertPreTrainedModel):
             seq_output.shape[2])) * src_mask.unsqueeze(2).to(seq_output.dtype)
         src_idx = input_ids.gather(1, src_idx) * src_mask.long()
 
+        logits = self.classifier(src_output)
+        act_loss_mask = labels_action.ne(self.pad_tag_id)
+        loss_action = self.get_active_loss(act_loss_mask, logits, labels_action, self.num_labels)
+        rule_logits = self.rule_classifier(src_output)
+        loss_rule = self.get_active_loss(act_loss_mask, rule_logits, rule, self.num_rules)
+
         max_sp_len = labels_start.shape[-1]
         start_dist, end_dist, sp_loss_mask = self.span_classifier(seq_output,
                 sp_width, max_sp_len, attention_mask, src_output, src_mask)
         sp_loss_mask = sp_loss_mask.float()
         start_outputs = start_dist.argmax(dim=-1)
         end_outputs = end_dist.argmax(dim=-1)
-
         loss_span = span_loss(start_dist, end_dist, labels_start, labels_end, sp_loss_mask)
 
-        logits = self.classifier(src_output)
-        act_loss_mask = labels_action.gt(-1)
-        loss_action = self.get_active_loss(act_loss_mask, logits, labels_action, self.num_labels)
-        rule_logits = self.rule_classifier(src_output)
-        rule_loss_mask = rule.gt(-1)
-        loss_rule = self.get_active_loss(rule_loss_mask, rule_logits, rule, self.num_rules)
         loss = loss_action + loss_rule + loss_span
 
         if self.rl_model is not None:
-            loss_rl = self.apply_rl(logits, rule_logits, start_dist, end_dist, start_outputs, end_outputs, src_idx, input_ids, attention_mask, rule_loss_mask, act_loss_mask, sp_loss_mask, input_ref, max_sp_len)
+            loss_rl = self.apply_rl(logits, rule_logits, start_dist, end_dist, start_outputs, end_outputs, src_idx, input_ids, attention_mask, act_loss_mask, sp_loss_mask, input_ref, max_sp_len)
             loss = (1. - self.rl_ratio) * loss + self.rl_ratio * loss_rl
 
-        outputs = (loss, logits, start_outputs, end_outputs)
+        outputs = (loss, logits, rule_logits, start_outputs, end_outputs)
         return outputs
 
     def apply_rl(self, logits, rule_logits, start_dist, end_dist, start_outputs, end_outputs,
-            src_idx, ctx_idx, attention_mask, act_loss_mask, rule_loss_mask, sp_loss_mask, input_ref, max_sp_len, perm=(0, 2, 1, 3)):
-        samples_action = Categorical(logits=logits).sample() # [bs, seq]
-        samples_action_prob = torch.gather(logits, 2, samples_action.unsqueeze(dim=2)) #[bs, seq_len, 1]
-        greedy_action = logits.argmax(dim=-1) # [bs, seq]
+            src_idx, ctx_idx, attention_mask, act_loss_mask, sp_loss_mask, input_ref, max_sp_len, perm=(0, 2, 1, 3)):
+        samples_action, samples_action_prob, greedy_action = self.get_sample_greedy(logits)
+        samples_rule, samples_rule_prob, greedy_rule = self.get_sample_greedy(rule_logits)
 
         bsz, seq_len, _, full_len = start_dist.shape
-        start_dist = start_dist.permute(*perm).reshape(-1, seq_len, full_len)
-        end_dist = end_dist.permute(*perm).reshape(-1, seq_len, full_len)
-
-        samples_start = Categorical(logits=start_dist).sample() # [bs, seq]
-        samples_end = Categorical(logits=end_dist).sample() # [bs, seq]
-        samples_start_prob = torch.gather(start_dist, 2, samples_start.unsqueeze(dim=2)) #[bs, seq_len, 1]
-        samples_end_prob = torch.gather(end_dist, 2, samples_end.unsqueeze(dim=2)) #[bs, seq_len, 1]
+        start_dist, samples_start, samples_start_prob = self.sample_sp(start_dist, perm, seq_len, full_len)
+        end_dist, samples_end, samples_end_prob = self.sample_sp(end_dist, perm, seq_len, full_len)
 
         nview = (bsz, max_sp_len, seq_len)
-        samples_start = samples_start.view(*nview).permute(*perm[:-1])
-        samples_end = samples_end.view(*nview).permute(*perm[:-1])
-        samples_start_prob = samples_start_prob.view(*nview).permute(*perm[:-1])
-        samples_end_prob = samples_end_prob.view(*nview).permute(*perm[:-1])
+        samples_start, samples_end, samples_start_prob, samples_end_prob =\
+                map(lambda x: self.reshape_sp(x, nview, perm[:-1]),
+                    (samples_start, samples_end, samples_start_prob, samples_end_prob))
 
         rewards = []
         act_loss_mask = act_loss_mask.float()
         for i in range(len(samples_start)):
-            src_len = act_loss_mask[i].long().sum()
-            src_tokens = self.tokenizer.convert_ids_to_tokens(src_idx[i][:src_len].tolist())
-            ctx_len = attention_mask[i].long().sum()
-            ctx_tokens = self.tokenizer.convert_ids_to_tokens(ctx_idx[i][:ctx_len].tolist())
-            loss_mask_lst = act_loss_mask[i].tolist()
-            sample_str = decode_into_string(src_tokens, samples_action[i][:src_len].tolist(), samples_start[i][:src_len].tolist(), samples_end[i][:src_len].tolist(), loss_mask_lst, context=ctx_tokens)
-            greedy_str = decode_into_string(src_tokens, greedy_action[i][:src_len].tolist(), start_outputs[i][:src_len].tolist(), end_outputs[i][:src_len].tolist(), loss_mask_lst, context=ctx_tokens)
+            src_len, src_tokens = self.get_len_tokens(act_loss_mask[i], src_idx[i])
+            ctx_len, ctx_tokens = self.get_len_tokens(attention_mask[i], ctx_idx[i])
+
+            sample_str = self.decode_into_string(src_tokens, samples_action[i].tolist(), samples_rule[i].tolist(), samples_start[i].tolist(), samples_end[i].tolist(), src_len, context=ctx_tokens, context_len=ctx_len)
+            greedy_str = self.decode_into_string(src_tokens, greedy_action[i].tolist(), greedy_rule[i].tolist(), start_outputs[i].tolist(), end_outputs[i].tolist(), src_len, context=ctx_tokens, context_len=ctx_len)
 
             input_ref_lst = [input_ref[i].split()]
             sample_score = self.bleu_fn(input_ref_lst, sample_str.split())
@@ -196,11 +170,13 @@ class BertForSequenceTagging(BertPreTrainedModel):
 
         rewards = torch.as_tensor(rewards, device=logits.device).unsqueeze(1)
         loss_action_rl = self.rl_loss(samples_action_prob.squeeze(2), act_loss_mask, rewards)
+        loss_rule_rl = self.rl_loss(samples_rule_prob.squeeze(2), act_loss_mask, rewards)
+
         rewards = rewards.unsqueeze(2)
         loss_st_rl = self.rl_loss(samples_start_prob, sp_loss_mask, rewards)
         loss_ed_rl = self.rl_loss(samples_end_prob, sp_loss_mask, rewards)
 
-        loss_rl = loss_action_rl + loss_st_rl + loss_ed_rl
+        loss_rl = loss_action_rl + loss_rule_rl + loss_st_rl + loss_ed_rl
         return loss_rl
 
     def get_active_loss(self, loss_mask, logits, labels, num_labels):
@@ -210,7 +186,48 @@ class BertForSequenceTagging(BertPreTrainedModel):
         return self.loss_fn(active_logits, active_labels)
 
     @staticmethod
+    def get_sample_greedy(logits):
+        samples = Categorical(logits=logits).sample() # [bs, seq]
+        samples_prob = torch.gather(logits, 2, samples.unsqueeze(dim=2)) #[bs, seq_len, 1]
+        greedy = logits.argmax(dim=-1) # [bs, seq]
+        return samples, samples_prob, greedy
+
+    @staticmethod
+    def sample_sp(dist, perm, seq_len, full_len):
+        dist = dist.permute(*perm).reshape(-1, seq_len, full_len)
+        samples = Categorical(logits=dist).sample() # [bs, seq]
+        samples_prob = torch.gather(dist, 2, samples.unsqueeze(dim=2)) #[bs, seq_len, 1]
+        return dist, samples, samples_prob
+
+    @staticmethod
+    def reshape_sp(inp, nview, perm):
+        return inp.view(*nview).permute(*perm)
+
+    @staticmethod
     def rl_loss(prob, mask, rewards):
         loss = -clip_and_normalize(prob, 1e-6).log()
         loss *= rewards * mask
         return loss.sum() / mask.sum()
+
+    def get_len_tokens(self, loss_mask, inp_idx):
+        inp_len = loss_mask.long().sum()
+        inp_tokens = self.tokenizer.convert_ids_to_tokens(inp_idx[:inp_len].tolist())
+        return inp_len, inp_tokens
+
+    def decode_into_string(self, source, label_action, label_rule, label_start, label_end, src_len, context=None, context_len=0, null_i=0):
+        if context is None:
+            context = source
+            context_len = src_len
+        context = context[:context_len]
+
+        labels = []
+        for idx in range(src_len):
+            st, ed = null_i, null_i
+            action = self.tags[label_action[idx]]
+            rule = label_rule[idx]
+            if rule > 0:
+                st, ed = get_sp_strs(label_start[idx], label_end[idx], context_len)
+                rule = label_rule[idx]
+            labels.append(f'{action}|{st}#{ed}|{rule}')
+        output_tokens = tags_to_string(source, labels, self.rules, self.rule_slot_cnts, context=context)
+        return convert_tokens_to_string(output_tokens)
