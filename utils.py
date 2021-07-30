@@ -142,38 +142,6 @@ def get_sp_strs(start_lst, end_lst, context_len):
     return starts, ends
 
 
-def tags_to_string(source, labels, rules, rule_slot_cnts, context=None, ignore_toks=set(['[SEP]', '[CLS]', '[UNK]', '|', '*'])):
-    output_tokens = []
-    for token, tag in zip(source, labels):
-        action, added_phrase, rule_id = tag.split('|')
-        rule_id = int(rule_id)
-        slot_cnt = rule_slot_cnts[rule_id]
-        starts, ends = added_phrase.split("#")
-        starts, ends = map(lambda x: x.split(','), (starts, ends))
-        sub_phrs = []
-        for i, start in enumerate(starts):
-            s_i, e_i = int(start), int(ends[i])
-            add_phrase = ' '.join([s for s in context[s_i:e_i+1] if s not in ignore_toks])
-            if add_phrase:
-                sub_phrs.append(add_phrase)
-                if len(sub_phrs) == slot_cnt:
-                    break
-        sub_phrs.extend([''] * (slot_cnt - len(sub_phrs)))
-        phr_toks = rules[rule_id].format(*sub_phrs).strip().split()
-        output_tokens.extend(phr_toks)
-        if action == 'KEEP':
-            if token not in ignore_toks:
-                output_tokens.append(token)
-        if len(output_tokens) > len(context):
-            break
-
-    if not output_tokens:
-       output_tokens.append('*')
-    elif len(output_tokens) > 1 and output_tokens[-1] == '*':
-       output_tokens = output_tokens[:-1]
-    return convert_tokens_to_string(output_tokens)
-
-
 def load_rules(rule_path, mask='_'):
     with open(rule_path, encoding='utf8') as f:
         rules = [''] + [l.strip().replace(mask, '{}') for l in f]

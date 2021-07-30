@@ -9,6 +9,7 @@ import utils
 import torch.nn as nn
 
 from tqdm import trange
+from transformers import BertConfig
 from transformers.optimization import get_linear_schedule_with_warmup, AdamW
 
 from evaluate import evaluate
@@ -99,11 +100,11 @@ def main(args):
     params.rules, params.rule_slot_cnts = load_rules(args.rule_path)
 
     # Prepare model
+    config = get_config(data_loader.tokenizer, params, bert_class, args.bleu_rl)
     if args.restore_dir is not None:
         logging.info(f'Restoring model from {args.restore_dir}')
         bert_class = args.restore_dir
-
-    config = get_config(data_loader.tokenizer, params, bert_class, args.bleu_rl)
+        config = BertConfig.from_pretrained(bert_class)
     model = BertForSequenceTagging.from_pretrained(bert_class, config=config)
     model.to(params.device)
 
@@ -139,9 +140,9 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', default='acl19', help="Directory containing the dataset")
+    parser.add_argument('--dataset', help="Directory containing the dataset")
     parser.add_argument('--rule_path', help='Path to phrase rules for first-level decoder')
-    parser.add_argument('--model', default='acl19/w_bleu_rl_transfer_token_bugfix', help="Directory containing the model")
+    parser.add_argument('--model', help="Directory containing the model")
     parser.add_argument('--gpu', default='0', help="gpu device")
     parser.add_argument('--bleu_rl', action='store_true')
     parser.add_argument('--seed', type=int, default=2020, help="random seed for initialization")

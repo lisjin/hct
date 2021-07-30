@@ -13,12 +13,10 @@ from transformers import BertTokenizer, BertModel
 from torch.distributions import Categorical
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 
+from multi_headed_additive_attn import MultiHeadedAttention
 from utils import convert_tokens_to_string, get_sp_strs
 
 cc = SmoothingFunction()
-
-from utils import tags_to_string
-from multi_headed_additive_attn import MultiHeadedAttention
 
 
 class SpanClassifier(nn.Module):
@@ -126,7 +124,7 @@ class BertForSequenceTagging(BertPreTrainedModel):
         max_sp_len = labels_start.shape[-1]
         start_dist, end_dist, sp_loss_mask = self.span_classifier(seq_output,
                 sp_width, max_sp_len, attention_mask, src_output, src_mask)
-        sp_loss_mask = sp_loss_mask.float()
+        sp_loss_mask = torch.logical_and(rule.gt(0).unsqueeze(2), sp_loss_mask).float()
         start_outputs = start_dist.argmax(dim=-1)
         end_outputs = end_dist.argmax(dim=-1)
         loss_span = span_loss(start_dist, end_dist, labels_start, labels_end, sp_loss_mask)
@@ -214,12 +212,7 @@ class BertForSequenceTagging(BertPreTrainedModel):
         inp_tokens = self.tokenizer.convert_ids_to_tokens(inp_idx[:inp_len].tolist())
         return inp_len, inp_tokens
 
-    def decode_into_string(self, source, label_action, label_rule, label_start, label_end, src_len, context=None, context_len=0, null_i=0):
-        if context is None:
-            context = source
-            context_len = src_len
-        context = context[:context_len]
-
+    def get_labels(self, label_action, label_rule, label_start, label_end, src_len, context_len, null_i=0):
         labels = []
         for idx in range(src_len):
             st, ed = null_i, null_i
@@ -229,5 +222,44 @@ class BertForSequenceTagging(BertPreTrainedModel):
                 st, ed = get_sp_strs(label_start[idx], label_end[idx], context_len)
                 rule = label_rule[idx]
             labels.append(f'{action}|{st}#{ed}|{rule}')
-        output_tokens = tags_to_string(source, labels, self.rules, self.rule_slot_cnts, context=context)
+        return labels
+
+    def tags_to_string(self, source, labels, context=None, ignore_toks=set(['[SEP]', '[CLS]', '[UNK]', '|', '*'])):
+        output_tokens = []
+        for token, tag in zip(source, labels):
+            action, added_phrase, rule_id = tag.split('|')
+            rule_id = int(rule_id)
+            slot_cnt = self.rule_slot_cnts[rule_id]
+            starts, ends = added_phrase.split("#")
+            starts, ends = map(lambda x: x.split(','), (starts, ends))
+            sub_phrs = []
+            for i, start in enumerate(starts):
+                s_i, e_i = int(start), int(ends[i])
+                add_phrase = ' '.join([s for s in context[s_i:e_i+1] if s not in ignore_toks])
+                if add_phrase:
+                    sub_phrs.append(add_phrase)
+                    if len(sub_phrs) == slot_cnt:
+                        break
+            sub_phrs.extend([''] * (slot_cnt - len(sub_phrs)))
+            phr_toks = self.rules[rule_id].format(*sub_phrs).strip().split()
+            output_tokens.extend(phr_toks)
+            if action == 'KEEP':
+                if token not in ignore_toks:
+                    output_tokens.append(token)
+            if len(output_tokens) > len(context):
+                break
+
+        if not output_tokens:
+           output_tokens.append('*')
+        elif len(output_tokens) > 1 and output_tokens[-1] == '*':
+           output_tokens = output_tokens[:-1]
         return convert_tokens_to_string(output_tokens)
+
+    def decode_into_string(self, source, label_action, label_rule, label_start, label_end, src_len, context=None, context_len=0):
+        if context is None:
+            context = source
+            context_len = src_len
+        context = context[:context_len]
+        labels = self.get_labels(label_action, label_rule, label_start, label_end, src_len, context_len)
+        out_str = self.tags_to_string(source, labels, context=context)
+        return out_str

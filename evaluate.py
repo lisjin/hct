@@ -9,29 +9,14 @@ import random
 import shutil
 import torch
 
-from transformers import BertTokenizer
+from transformers import BertTokenizer, BertConfig
 from nltk.translate.bleu_score import corpus_bleu
 
 from data_loader import DataLoader
 from metrics import f1_score, get_entities, classification_report, accuracy_score
 from score import Metrics
 from sequence_tagger import BertForSequenceTagging
-from utils import tags_to_string, get_sp_strs, save_checkpoint, set_logger, Params, RunningAverage, load_rules
-
-
-def convert_back_tags(pred_action, pred_rule, pred_start, pred_end, true_action, true_rule, true_start, true_end, context_lens):
-    pred_tags = []
-    true_tags = []
-    for i in range(len(pred_action)):
-        pred_tags.append([])
-        true_tags.append([])
-        for j in range(len(pred_action[i])):
-            pstarts, pends = get_sp_strs(pred_start[i][j].tolist(), pred_end[i][j].tolist(), context_lens[j])
-            pred_tags[-1].append(f'{pred_action[i][j]}|{pstarts}#{pends}|{pred_rule[i][j]}')
-
-            tstarts, tends = get_sp_strs(true_start[i][j].tolist(), true_end[i][j].tolist(), context_lens[j])
-            true_tags[-1].append(f'{true_action[i][j]}|{tstarts}#{tends}|{true_rule[i][j]}')
-    return pred_tags, true_tags
+from utils import get_sp_strs, save_checkpoint, set_logger, Params, RunningAverage, get_config, load_rules
 
 
 def eval_to_cpu(out, inp):
@@ -46,9 +31,6 @@ def write_pred(ckpt_dir, hypo, epoch, bleu, mode='dev'):
 
 def evaluate(model, data_iterator, params, epoch, mark='Eval', verbose=False, best_val_bleu=0., optimizer=None, scheduler=None):
     """Evaluate the model on `steps` batches."""
-    model.eval()
-
-    idx2tag = params.idx2tag
     true_action_tags, pred_action_tags = [], []
     true_rule_tags, pred_rule_tags = [], []
     true_start_tags, pred_start_tags = [], []
@@ -58,6 +40,7 @@ def evaluate(model, data_iterator, params, epoch, mark='Eval', verbose=False, be
     references = []
     loss_avg = RunningAverage()
 
+    model.eval()
     for _ in range(params.eval_steps):
         batch_data, batch_ref, batch_action, batch_start, batch_end, batch_sp_width, batch_rule, batch_src_idx = next(data_iterator)
         with torch.no_grad():
@@ -79,34 +62,27 @@ def evaluate(model, data_iterator, params, epoch, mark='Eval', verbose=False, be
         batch_action_output = np.argmax(batch_action_output, axis=2)
         batch_rule_output = np.argmax(batch_rule_output, axis=2)
         for i, cur_len in enumerate(src_lens[-batch_action.shape[0]:]):
-            pred_action_tags.append([idx2tag[x] for x in batch_action_output[i, :cur_len]])
-            true_action_tags.append([idx2tag[x] for x in batch_action[i, :cur_len]])
-            pred_rule_tags.append(batch_rule_output[i, :cur_len])
-            true_rule_tags.append(batch_rule[i, :cur_len])
-            pred_start_tags.append(batch_start_output[i, :cur_len])
-            true_start_tags.append(batch_start[i, :cur_len])
-            pred_end_tags.append(batch_end_output[i, :cur_len])
-            true_end_tags.append(batch_end[i, :cur_len])
-
-    pred_tags, true_tags = convert_back_tags(pred_action_tags, pred_rule_tags,
-            pred_start_tags, pred_end_tags, true_action_tags, true_rule_tags,
-            true_start_tags, true_end_tags, ctx_lens)
-    assert len(pred_tags) == len(true_tags)
-
-    ctx, src = [], []
-    for i in range(len(ctx_tokens)):
-        ctx.append(model.tokenizer.convert_ids_to_tokens(ctx_tokens[i].tolist()))
-        src.append([ctx[-1][x] for x in src_tokens[i]])
+            pred_action_tags.append(batch_action_output[i, :cur_len].tolist())
+            true_action_tags.append(batch_action[i, :cur_len].tolist())
+            pred_rule_tags.append(batch_rule_output[i, :cur_len].tolist())
+            true_rule_tags.append(batch_rule[i, :cur_len].tolist())
+            pred_start_tags.append(batch_start_output[i, :cur_len].tolist())
+            true_start_tags.append(batch_start[i, :cur_len].tolist())
+            pred_end_tags.append(batch_end_output[i, :cur_len].tolist())
+            true_end_tags.append(batch_end[i, :cur_len].tolist())
 
     hypo = []
+    pred_tags = []
+    true_tags = []
     for i, src_len in enumerate(src_lens):
-        context = ctx[i][:ctx_lens[i]]
-        source = src[i][:src_len]
-        pred = tags_to_string(source, pred_tags[i], model.rules, model.rule_slot_cnts, context=context).strip()
-        hypo.append(pred.lower())
+        context = model.tokenizer.convert_ids_to_tokens(ctx_tokens[i].tolist())[:ctx_lens[i]]
+        source = [context[x] for x in src_tokens[i][:src_len]]
 
-    for i in range(len(pred_tags)):
+        pred_tags.append(model.get_labels(pred_action_tags[i], pred_rule_tags[i], pred_start_tags[i], pred_end_tags[i], src_len, ctx_lens[i]))
+        true_tags.append(model.get_labels(true_action_tags[i], true_rule_tags[i], true_start_tags[i], true_end_tags[i], src_len, ctx_lens[i]))
         assert len(pred_tags[i]) == len(true_tags[i])
+
+        hypo.append(model.tags_to_string(source, pred_tags[i], context=context))
 
     metrics = {}
     bleu1, bleu2, bleu3, bleu4 = Metrics.bleu_score(references, hypo)
@@ -139,9 +115,9 @@ def evaluate(model, data_iterator, params, epoch, mark='Eval', verbose=False, be
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', default='acl19', help="Directory containing the dataset")
+    parser.add_argument('--dataset', help="Directory containing the dataset")
     parser.add_argument('--rule_path', help='Path to phrase rules for first-level decoder')
-    parser.add_argument('--model', default='acl19/w_bleu_rl_transfer_token_bugfix', help="Directory containing the trained model")
+    parser.add_argument('--model', help="Directory containing the trained model")
     parser.add_argument('--gpu', default='0', help="gpu device")
     parser.add_argument('--seed', type=int, default=23, help="random seed for initialization")
     parser.add_argument('--restore_dir', required=True)
@@ -162,13 +138,11 @@ if __name__ == '__main__':
     set_logger(os.path.join(args.model, 'evaluate.log'))
     logging.info("Loading the dataset...")
 
-    config = get_config(data_loader.tokenizer, params, args.restore_dir, args.bleu_rl)
-    model = BertForSequenceTagging.from_pretrained(bert_class, config=config)
-    if args.bleu_rl:
-        model._rl_model = 'bleu'
+    data_loader = DataLoader(args.dataset, bert_class, params)
+    config = BertConfig.from_pretrained(args.restore_dir)
+    model = BertForSequenceTagging.from_pretrained(args.restore_dir, config=config)
     model.to(params.device)
 
-    data_loader = DataLoader(args.dataset, bert_class, params)
     test_data = data_loader.load_data('test')
     params.test_size = test_data['size']
     params.eval_steps = math.ceil(params.test_size / params.batch_size)

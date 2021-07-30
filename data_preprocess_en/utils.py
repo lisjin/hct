@@ -7,7 +7,6 @@ from functools import partial
 from itertools import chain
 from nltk import Tree
 
-from .utils_data import yield_sources_and_targets
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 from score import Metrics
 
@@ -140,6 +139,7 @@ def align_phr_tgt(phr_lst, target):
 
 
 def compute_bleu(refs=None, hyps=None, args=None, hyp_path=None):
+    from utils_data import yield_sources_and_targets
     if refs is None:
         refs = [target for _, target in yield_sources_and_targets(
             os.path.join(args.data_dir, f'{args.split}.tsv'), args.tsv_fmt)]
