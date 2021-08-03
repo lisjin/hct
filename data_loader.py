@@ -44,13 +44,10 @@ class DataLoader(object):
         cum_num = 0
         src_start = orig_start = len(tokens)
         for i, token in enumerate(tokens):
-            if token == '[SEP]':
-                pieces = [token]
-            else:
-                pieces = self.tokenizer.tokenize(token)
-                if token == '|':
-                    src_start = len(bert_tokens) + 1
-                    orig_start = i + 1
+            pieces = self.tokenizer.tokenize(token)
+            if token == '|':
+                src_start = len(bert_tokens) + 1
+                orig_start = i + 1
 
             bert_label_action.extend([label_action[i]] * len(pieces))
             bert_tokens.extend(pieces)
@@ -123,7 +120,7 @@ class DataLoader(object):
         line1, line2 = line
         src, tgt = line1.split("\t")
         tgt = ' '.join(tgt.strip().split())
-        tokens = ['[CLS]'] + src.strip().split(' ')
+        tokens = [self.tokenizer.cls_token] + src.strip().split(' ')
 
         action_seq, span_seq, rule_seq = zip(*[x.split('|') for x in\
                 line2.strip().split(' ')])

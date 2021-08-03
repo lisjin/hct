@@ -1,4 +1,3 @@
-"""Evaluate the model"""
 import argparse
 import logging
 import math
@@ -8,15 +7,14 @@ import re
 import random
 import shutil
 import torch
-
-from transformers import BertTokenizer, BertConfig
-from nltk.translate.bleu_score import corpus_bleu
+import transformers
+transformers.logging.set_verbosity(transformers.logging.ERROR)
 
 from data_loader import DataLoader
-from metrics import f1_score, get_entities, classification_report, accuracy_score
+from metrics import f1_score, classification_report, accuracy_score
 from score import Metrics
 from sequence_tagger import BertForSequenceTagging
-from utils import get_sp_strs, save_checkpoint, set_logger, Params, RunningAverage, get_config, load_rules
+from utils import load_checkpoint, save_checkpoint, load_rules, get_config, set_logger, Params, RunningAverage
 
 
 def eval_to_cpu(out, inp):
@@ -29,7 +27,7 @@ def write_pred(ckpt_dir, hypo, epoch, bleu, mode='dev'):
         pred_out.writelines([f'{hyp}\n' for hyp in hypo])
 
 
-def evaluate(model, data_iterator, params, epoch, mark='Eval', verbose=False, best_val_bleu=0., optimizer=None, scheduler=None):
+def evaluate(model, data_iterator, params, epoch, mark='val', verbose=False, best_val_bleu=0., optimizer=None, scheduler=None):
     """Evaluate the model on `steps` batches."""
     true_action_tags, pred_action_tags = [], []
     true_rule_tags, pred_rule_tags = [], []
@@ -87,9 +85,9 @@ def evaluate(model, data_iterator, params, epoch, mark='Eval', verbose=False, be
     metrics = {}
     bleu1, bleu2, bleu3, bleu4 = Metrics.bleu_score(references, hypo)
     ckpt_dir = os.path.join(params.tagger_model_dir, f'{epoch:02d}')
-    if mark == "Test":
+    if mark == "test":
         write_pred(ckpt_dir, hypo, epoch, bleu4, mode='test')
-    elif mark == "Val":
+    elif mark == "val":
         if bleu4 > best_val_bleu:
             ckpt_files = [os.path.join(params.tagger_model_dir, x) for x in\
                     os.listdir(params.tagger_model_dir) if re.search(r'^\d+$', x)]
@@ -131,25 +129,23 @@ if __name__ == '__main__':
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     params.seed = args.seed
-    params.batch_size = 1
-    bert_class = params.bert_class
-    params.rules, params.rule_slot_cnts = load_rules(args.rule_path)
 
     set_logger(os.path.join(args.model, 'evaluate.log'))
     logging.info("Loading the dataset...")
-
+    bert_class = params.bert_class
+    params.rules, params.rule_slot_cnts = load_rules(args.rule_path)
     data_loader = DataLoader(args.dataset, bert_class, params)
-    config = BertConfig.from_pretrained(args.restore_dir)
-    model = BertForSequenceTagging.from_pretrained(args.restore_dir, config=config)
-    model.to(params.device)
-
     test_data = data_loader.load_data('test')
     params.test_size = test_data['size']
     params.eval_steps = math.ceil(params.test_size / params.batch_size)
     params.tagger_model_dir = args.model
 
+    config = get_config(params, bert_class, False)
+    model = BertForSequenceTagging(config)
+    model, _, _, _ = load_checkpoint(model, args.restore_dir)
+    model.to(params.device)
+
     logging.info("Starting evaluation...")
     test_data_iterator = data_loader.data_iterator(test_data, shuffle=False)
     epoch = int(os.path.basename(os.path.normpath(args.restore_dir)))
-    test_metrics = evaluate(model, test_data_iterator, params, epoch,
-            mark='Test')
+    test_metrics = evaluate(model, test_data_iterator, params, epoch, mark='test')

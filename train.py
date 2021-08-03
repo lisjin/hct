@@ -1,4 +1,3 @@
-"""Train and evaluate the model"""
 import argparse
 import logging
 import math
@@ -7,18 +6,16 @@ import random
 import torch
 import utils
 import torch.nn as nn
+import transformers
+transformers.logging.set_verbosity(transformers.logging.ERROR)
 
 from tqdm import trange
-from transformers import BertConfig
 from transformers.optimization import get_linear_schedule_with_warmup, AdamW
 
 from evaluate import evaluate
 from data_loader import DataLoader
 from sequence_tagger import BertForSequenceTagging
 from utils import load_checkpoint, get_config, load_rules
-
-import transformers
-transformers.logging.set_verbosity(transformers.logging.ERROR)
 
 
 def train_epoch(model, data_iterator, optimizer, scheduler, params):
@@ -66,7 +63,7 @@ def train_and_evaluate(model, data_loader, train_data, val_data, optimizer, sche
         train_epoch(model, train_data_iterator, optimizer, scheduler, params)
 
         val_data_iterator = data_loader.data_iterator(val_data, shuffle=False)
-        val_metrics = evaluate(model, val_data_iterator, params, epoch, mark='Val', best_val_bleu=best_val_bleu, optimizer=optimizer, scheduler=scheduler)
+        val_metrics = evaluate(model, val_data_iterator, params, epoch, mark='val', best_val_bleu=best_val_bleu, optimizer=optimizer, scheduler=scheduler)
         if 'best_val_bleu' in val_metrics:
             best_val_bleu = val_metrics['best_val_bleu']
             patience_counter = 0
@@ -77,6 +74,23 @@ def train_and_evaluate(model, data_loader, train_data, val_data, optimizer, sche
         if (patience_counter >= params.patience_num and epoch > params.min_epoch_num) or epoch == params.epoch_num:
             logging.info("Best val BLEU: {:05.2f}".format(best_val_bleu))
             break
+
+
+def get_optimizer_params(params, model):
+    # Prepare optimizer
+    if params.full_finetuning:
+        param_optimizer = list(model.named_parameters())
+        no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
+             'weight_decay': params.weight_decay},
+            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
+             'weight_decay': 0.0}
+        ]
+    else: # only finetune the head classifier
+        param_optimizer = list(model.classifier.named_parameters())
+        optimizer_grouped_parameters = [{'params': [p for n, p in param_optimizer]}]
+    return optimizer_grouped_parameters
 
 
 def main(args):
@@ -92,36 +106,17 @@ def main(args):
     utils.set_logger(os.path.join(args.model, 'train.log'))
 
     bert_class = params.bert_class
+    params.rules, params.rule_slot_cnts = load_rules(args.rule_path)
     data_loader = DataLoader(args.dataset, bert_class, params)
     train_data = data_loader.load_data('train')
     val_data = data_loader.load_data('dev')
     params.train_size = train_data['size']
     params.val_size = val_data['size']
-    params.rules, params.rule_slot_cnts = load_rules(args.rule_path)
 
-    # Prepare model
-    config = get_config(data_loader.tokenizer, params, bert_class, args.bleu_rl)
-    if args.restore_dir is not None:
-        logging.info(f'Restoring model from {args.restore_dir}')
-        bert_class = args.restore_dir
-        config = BertConfig.from_pretrained(bert_class)
-    model = BertForSequenceTagging.from_pretrained(bert_class, config=config)
-    model.to(params.device)
+    config = get_config(params, bert_class, args.bleu_rl)
+    model = BertForSequenceTagging(config)
 
-    # Prepare optimizer
-    if params.full_finetuning:
-        param_optimizer = list(model.named_parameters())
-        no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-        optimizer_grouped_parameters = [
-            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
-             'weight_decay': params.weight_decay},
-            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
-             'weight_decay': 0.0}
-        ]
-    else: # only finetune the head classifier
-        param_optimizer = list(model.classifier.named_parameters())
-        optimizer_grouped_parameters = [{'params': [p for n, p in param_optimizer]}]
-
+    optimizer_grouped_parameters = get_optimizer_params(params, model)
     optimizer = AdamW(optimizer_grouped_parameters, lr=params.learning_rate, correct_bias=False)
     cur_epoch = 1
     train_steps_per_epoch = math.ceil(params.train_size / params.batch_size)
@@ -130,8 +125,10 @@ def main(args):
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps, last_epoch=cur_epoch - 2)
     best_val_bleu = 0.
     if args.restore_dir is not None:
-        optimizer, scheduler, best_val_bleu = load_checkpoint(optimizer, scheduler, args.restore_dir)
+        logging.info(f'Restoring model from {args.restore_dir}')
+        model, optimizer, scheduler, best_val_bleu = load_checkpoint(model, args.restore_dir, optimizer=optimizer, scheduler=scheduler)
         cur_epoch = int(os.path.basename(os.path.normpath(args.restore_dir))) + 1
+    model.to(params.device)
 
     params.tagger_model_dir = args.model
     logging.info("Starting training for {} epoch(s)".format(params.epoch_num - cur_epoch + 1))

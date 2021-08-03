@@ -94,23 +94,24 @@ def set_logger(log_path):
         logger.addHandler(stream_handler)
 
 
-def load_checkpoint(optimizer, scheduler, restore_dir):
-    osd_path = os.path.join(restore_dir, 'optim.bin')
-    if os.path.isfile(osd_path):
+def load_checkpoint(model, ckpt_dir, optimizer=None, scheduler=None):
+    model.load_state_dict(torch.load(os.path.join(ckpt_dir, 'model.bin')))
+    osd_path = os.path.join(ckpt_dir, 'optim.bin')
+    if optimizer is not None and os.path.isfile(osd_path):
         optimizer.load_state_dict(torch.load(osd_path))
-    ssd_path = os.path.join(restore_dir, 'sched.bin')
-    if os.path.isfile(ssd_path):
+    ssd_path = os.path.join(ckpt_dir, 'sched.bin')
+    if scheduler is not None and os.path.isfile(ssd_path):
         scheduler.load_state_dict(torch.load(ssd_path))
     best_val_bleu = 0.
-    for x in os.listdir(restore_dir):
+    for x in os.listdir(ckpt_dir):
         if x.startswith('pred_dev'):
             best_val_bleu = float(x.split('_')[-1].split('.txt')[0])
-    return optimizer, scheduler, best_val_bleu
+    return model, optimizer, scheduler, best_val_bleu
 
 
 def save_checkpoint(model, ckpt_dir, optimizer, scheduler):
     os.mkdir(ckpt_dir)
-    model.save_pretrained(ckpt_dir)
+    torch.save(model.state_dict(), os.path.join(ckpt_dir, 'model.bin'))
     torch.save(optimizer.state_dict(), os.path.join(ckpt_dir, 'optim.bin'))
     torch.save(scheduler.state_dict(), os.path.join(ckpt_dir, 'sched.bin'))
 
@@ -142,21 +143,27 @@ def get_sp_strs(start_lst, end_lst, context_len):
     return starts, ends
 
 
-def load_rules(rule_path, mask='_'):
+def load_rules(rule_path, mask='_', fmask='{}'):
     with open(rule_path, encoding='utf8') as f:
-        rules = [''] + [l.strip().replace(mask, '{}') for l in f]
-    rule_slot_cnts = [sum(int(y == '{}') for y in x.split()) for x in rules]
+        rules = [''] + [l.strip().replace(mask, fmask) for l in f]
+    rule_slot_cnts = [sum(int(y == fmask) for y in x.split()) for x in rules]
     return rules, rule_slot_cnts
 
 
-def get_config(tokenizer, params, bert_class, bleu_rl):
+def get_config(params, bert_class, bleu_rl):
     config = BertConfig.from_pretrained(bert_class)
-    config.num_labels = len(params.tag2idx)
+    config.bert_class = bert_class
+    config.device = params.device
     config.rl_model = 'bleu' if bleu_rl else None
     config.rl_ratio = params.rl_ratio
-    config.rules = params.rules
-    config.rule_slot_cnts = params.rule_slot_cnts
+
+    config.num_labels = len(params.tag2idx)
     config.tags = params.idx2tag
     config.pad_tag_id = params.pad_tag_id
-    config.bert_class = bert_class
+
+    config.rules = params.rules
+    config.rule_slot_cnts = params.rule_slot_cnts
+    config.max_sp_len = params.max_sp_len
+    config.additional_special_tokens = tuple(f'[SLOT{x}]' for x in range(params.max_sp_len))
+    config.vocab_size += len(config.additional_special_tokens)
     return config
