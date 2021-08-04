@@ -11,7 +11,7 @@
     "grad_accum_steps": 1,
 
     "batch_size": 16,
-    "epoch_num": 30,
+    "epoch_num": 50,
     "min_epoch_num": 20,
     "warmup_epochs": 3,
     "patience": 2e-2,

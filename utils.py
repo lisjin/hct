@@ -1,9 +1,11 @@
 import os
 import json
 import torch
+import torch.nn.functional as F
 import logging
 import numpy as np
 
+from torch.distributions import Categorical
 from transformers import BertConfig
 
 from data_preprocess_en import utils as dutils
@@ -94,8 +96,8 @@ def set_logger(log_path):
         logger.addHandler(stream_handler)
 
 
-def load_checkpoint(model, ckpt_dir, optimizer=None, scheduler=None):
-    model.load_state_dict(torch.load(os.path.join(ckpt_dir, 'model.bin')))
+def load_checkpoint(model, ckpt_dir, device, optimizer=None, scheduler=None):
+    model.load_state_dict(torch.load(os.path.join(ckpt_dir, 'model.bin'), map_location=device))
     osd_path = os.path.join(ckpt_dir, 'optim.bin')
     if optimizer is not None and os.path.isfile(osd_path):
         optimizer.load_state_dict(torch.load(osd_path))
@@ -167,3 +169,20 @@ def get_config(params, bert_class, bleu_rl):
     config.additional_special_tokens = tuple(f'[SLOT{x}]' for x in range(params.max_sp_len))
     config.vocab_size += len(config.additional_special_tokens)
     return config
+
+
+def safe_log(inp, eps=1e-45):
+    return (inp + eps).log()
+
+
+def sample_helper(logits, dim=2):
+    samples = Categorical(logits=logits).sample()
+    samples_prob = torch.gather(logits, dim, samples.unsqueeze(dim))
+    return samples, samples_prob
+
+
+def cls_loss(dist, refs, masks):
+    refs = F.one_hot(refs, dist.shape[-1])
+    loss = torch.sum(safe_log(dist) * refs.float(), dim=-1)
+    num_tokens = torch.sum(masks).item()
+    return -torch.sum(loss * masks) / num_tokens

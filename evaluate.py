@@ -142,8 +142,8 @@ if __name__ == '__main__':
 
     config = get_config(params, bert_class, False)
     model = BertForSequenceTagging(config)
-    model, _, _, _ = load_checkpoint(model, args.restore_dir)
     model.to(params.device)
+    model, _, _, _ = load_checkpoint(model, args.restore_dir, params.device)
 
     logging.info("Starting evaluation...")
     test_data_iterator = data_loader.data_iterator(test_data, shuffle=False)

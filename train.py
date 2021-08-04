@@ -115,6 +115,7 @@ def main(args):
 
     config = get_config(params, bert_class, args.bleu_rl)
     model = BertForSequenceTagging(config)
+    model.to(params.device)
 
     optimizer_grouped_parameters = get_optimizer_params(params, model)
     optimizer = AdamW(optimizer_grouped_parameters, lr=params.learning_rate, correct_bias=False)
@@ -126,9 +127,8 @@ def main(args):
     best_val_bleu = 0.
     if args.restore_dir is not None:
         logging.info(f'Restoring model from {args.restore_dir}')
-        model, optimizer, scheduler, best_val_bleu = load_checkpoint(model, args.restore_dir, optimizer=optimizer, scheduler=scheduler)
+        model, optimizer, scheduler, best_val_bleu = load_checkpoint(model, args.restore_dir, params.device, optimizer=optimizer, scheduler=scheduler)
         cur_epoch = int(os.path.basename(os.path.normpath(args.restore_dir))) + 1
-    model.to(params.device)
 
     params.tagger_model_dir = args.model
     logging.info("Starting training for {} epoch(s)".format(params.epoch_num - cur_epoch + 1))

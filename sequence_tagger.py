@@ -6,33 +6,12 @@ from functools import partial
 from transformers.models.bert.modeling_bert import BertPreTrainedModel, CrossEntropyLoss
 from transformers import BertTokenizer, BertModel
 from torch.autograd import Variable
-from torch.distributions import Categorical
 from nltk.translate.bleu_score import SmoothingFunction, sentence_bleu
 
 from single_headed_additive_attn import SingleHeadedAttention
-from utils import convert_tokens_to_string, get_sp_strs
+from utils import convert_tokens_to_string, get_sp_strs, safe_log, sample_helper, cls_loss
 
 cc = SmoothingFunction()
-
-
-def cls_loss(dist, refs, masks):
-    refs = F.one_hot(refs, dist.shape[-1])
-    loss = torch.sum((dist + 1e-12).log() * refs.float(), dim=-1)
-    num_tokens = torch.sum(masks).item()
-    return -torch.sum(loss * masks) / num_tokens
-
-
-def span_loss(start_dist, end_dist, start_positions, end_positions, seq_masks):
-    if not seq_masks.any():
-        return 0.
-    span_st_loss = cls_loss(start_dist, start_positions, seq_masks)
-    span_ed_loss = cls_loss(end_dist, end_positions, seq_masks)
-    return span_st_loss + span_ed_loss
-
-
-def clip_and_normalize(probs, epsilon):
-    probs = torch.clamp(probs, epsilon, 1.0 - epsilon)
-    return probs / probs.sum(dim=-1, keepdim=True)
 
 
 class SpanClassifier(nn.Module):
@@ -52,12 +31,6 @@ class SpanClassifier(nn.Module):
         nn.init.normal_(self.src_rule_proj.weight, std=2e-2)
         nn.init.constant_(self.src_rule_proj.bias, 0.)
 
-    def upd_hid(self, attn_w, hid, hidp):
-        hidc = (hid.unsqueeze(1) * attn_w.unsqueeze(-1)).sum(2)
-        hidc = F.relu(self.sp_emb(torch.cat((hidp, hidc), 2)), inplace=True)
-        hidc = F.dropout(hidc, p=self.dropout, training=self.training)
-        return hidc
-
     def forward(self, hid, sp_width, max_sp_len, attention_mask, src_hid, src_mask, rule_emb):
         amask = torch.logical_and(src_mask.unsqueeze(2), attention_mask.unsqueeze(1)).float()
         attn_d = amask.sum(-1, keepdim=True)
@@ -76,6 +49,20 @@ class SpanClassifier(nn.Module):
             sts.append(self.span_st_attn(hid, hid1, mask=mask))
             eds.append(self.span_ed_attn(hid, hid2, mask=mask))
         return torch.stack(sts[1:], -2), torch.stack(eds[1:], -2), torch.stack(masks, -1)
+
+    @staticmethod
+    def span_loss(start_dist, end_dist, start_positions, end_positions, seq_masks):
+        if not seq_masks.any():
+            return 0.
+        span_st_loss = cls_loss(start_dist, start_positions, seq_masks)
+        span_ed_loss = cls_loss(end_dist, end_positions, seq_masks)
+        return span_st_loss + span_ed_loss
+
+    def upd_hid(self, attn_w, hid, hidp):
+        hidc = (hid.unsqueeze(1) * attn_w.unsqueeze(-1)).sum(2)
+        hidc = F.relu(self.sp_emb(torch.cat((hidp, hidc), 2)), inplace=True)
+        hidc = F.dropout(hidc, p=self.dropout, training=self.training)
+        return hidc
 
 
 class BertForSequenceTagging(nn.Module):
@@ -143,7 +130,8 @@ class BertForSequenceTagging(nn.Module):
         end_outputs = end_dist.argmax(dim=-1)
 
         sp_loss_mask = torch.logical_and(rule.gt(0).unsqueeze(2), sp_loss_mask).float()
-        loss_span = span_loss(start_dist, end_dist, labels_start, labels_end, sp_loss_mask)
+        loss_span = self.span_classifier.span_loss(start_dist, end_dist,
+                labels_start, labels_end, sp_loss_mask)
         return max_sp_len, start_dist, end_dist, sp_loss_mask, start_outputs, end_outputs, loss_span
 
     def apply_rl(self, logits, rule_logits, start_dist, end_dist, start_outputs,
@@ -161,6 +149,7 @@ class BertForSequenceTagging(nn.Module):
                 map(lambda x: self.reshape_sp(x, nview, perm[:-1]),
                     (samples_start, samples_end, samples_start_prob, samples_end_prob))
 
+        min_r, max_r = 1., -1.
         rewards = []
         act_loss_mask = act_loss_mask.float()
         for i in range(len(samples_start)):
@@ -174,8 +163,11 @@ class BertForSequenceTagging(nn.Module):
             sample_score = self.bleu_fn(input_ref_lst, sample_str.split())
             greedy_score = self.bleu_fn(input_ref_lst, greedy_str.split())
             rewards.append(sample_score - greedy_score)
+            min_r = min(min_r, rewards[-1])
+            max_r = max(max_r, rewards[-1])
 
         rewards = torch.as_tensor(rewards, device=logits.device).unsqueeze(1)
+        rewards = (rewards - min_r) / (max_r - min_r)
         loss_action_rl = self.rl_loss(samples_action_prob.squeeze(2), act_loss_mask, rewards)
         loss_rule_rl = self.rl_loss(samples_rule_prob.squeeze(2), act_loss_mask, rewards)
 
@@ -215,17 +207,15 @@ class BertForSequenceTagging(nn.Module):
 
     @staticmethod
     def get_sample_greedy(logits):
-        samples = Categorical(logits=logits).sample()
-        samples_prob = torch.gather(logits, 2, samples.unsqueeze(dim=2))
+        samples, samples_prob = sample_helper(logits)
         greedy = logits.argmax(dim=-1)
         return samples, samples_prob, greedy
 
     @staticmethod
-    def sample_sp(dist, perm, seq_len, full_len):
-        dist = dist.permute(*perm).reshape(-1, seq_len, full_len)
-        samples = Categorical(logits=dist).sample()
-        samples_prob = torch.gather(dist, 2, samples.unsqueeze(dim=2))
-        return dist, samples, samples_prob
+    def sample_sp(logits, perm, seq_len, full_len):
+        logits = logits.permute(*perm).reshape(-1, seq_len, full_len)
+        samples, samples_prob = sample_helper(logits)
+        return logits, samples, samples_prob
 
     @staticmethod
     def reshape_sp(inp, nview, perm):
@@ -233,7 +223,7 @@ class BertForSequenceTagging(nn.Module):
 
     @staticmethod
     def rl_loss(prob, mask, rewards):
-        loss = -clip_and_normalize(prob, 1e-6).log()
+        loss = -F.log_softmax(prob + safe_log(mask), -1)
         loss *= rewards * mask
         return loss.sum() / mask.sum()
 
