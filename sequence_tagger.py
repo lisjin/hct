@@ -115,7 +115,7 @@ class BertForSequenceTagging(nn.Module):
                 self.num_labels)
         rule_logits = self.rule_classifier(src_output)
         loss_rule = self.get_active_loss(act_loss_mask, rule_logits, rule,
-                self.num_rules)
+                self.num_rules) if self.training else 0.
         if not self.training:
             rule = rule_logits.argmax(2)
         rule_emb = self.rule_embeds[rule]

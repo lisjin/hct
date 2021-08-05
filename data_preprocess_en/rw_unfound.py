@@ -35,7 +35,7 @@ def get_phrs_add(args):
         k = int(k)
         phrs_add[k] = []
         rules_add[k] = []
-        for v2 in v['phr']:
+        for v2 in v:
             ctx_leaves = list(chain.from_iterable((cpts_uniq[c].leaves() + ['[SEP]'] for c in cids[i])))[:-1]
             phrs_add[k].append([])
             rules_add[k].append(-1)

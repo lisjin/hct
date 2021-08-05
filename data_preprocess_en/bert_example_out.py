@@ -76,11 +76,12 @@ class BertExampleBuilder(object):
     self._rules = rules
     self._single_rule_id = -1
     self._mask = mask
-    for i, rule in enumerate(rules):
-      if rule == mask:
-        self._single_rule_id = i
-        break
-    assert(self._single_rule_id > -1)
+    if rules:
+      for i, rule in enumerate(rules):
+        if rule == mask:
+          self._single_rule_id = i
+          break
+      assert(self._single_rule_id > -1)
 
   def build_bert_example(
       self,
