@@ -2,7 +2,7 @@
     "bert_class": "bert-base-chinese",
     "full_finetuning": true,
     "max_len": 144,
-    "max_sp_len": 2,
+    "max_sp_len": 1,
     "rl_ratio": 5e-1,
 
     "learning_rate": 2e-5,
@@ -10,9 +10,9 @@
     "clip_grad": 5,
     "grad_accum_steps": 1,
 
-    "batch_size": 18,
+    "batch_size": 17,
     "epoch_num": 50,
-    "min_epoch_num": 20,
+    "min_epoch_num": 15,
     "warmup_epochs": 3,
     "patience": 2e-2,
     "patience_num": 3

@@ -47,7 +47,7 @@ class TaggingConverter(object):
     # Set of tokens that are part of a phrase in self.phrase_vocabulary.
     self._token_vocabulary = set()
     for phrase in self._phrase_vocabulary:
-      tokens = utils.get_token_list(phrase)
+      tokens = phrase.split()
       self._token_vocabulary |= set(tokens)
       if len(tokens) > self._max_added_phrase_length:
         self._max_added_phrase_length = len(tokens)
@@ -64,7 +64,7 @@ class TaggingConverter(object):
       List of tagging.Tag objects. If the source couldn't be converted into the
       target via tagging, returns an empty list.
     """
-    target_tokens = utils.get_token_list(target.lower())
+    target_tokens = target.lower().split()
     tags = self._compute_tags_fixed_order(task.source_tokens, target_tokens)
     # If conversion fails, try to obtain the target after swapping the source
     # order.

@@ -44,7 +44,7 @@ def load_all_examples(args):
 
     outs = []
     for sources, target in yield_sources_and_targets(
-        os.path.join(args.data_dir, f'{args.split}.tsv'), args.tsv_fmt):
+        os.path.join(args.data_dir, f'{args.split}.tsv')):
         ctx, src = sources[0].split(' [CI] ')
         ctx = ctx.replace('[SEP]', '|')
         outs.append((ctx, target, src))
@@ -107,7 +107,7 @@ def cparse(outs, outs_k, args):
                 return ''
         return pt_str
 
-    pos = [(t[0][0].split(' [CI] '), t[1]) for k, t in enumerate(yield_sources_and_targets(os.path.join(args.data_dir, f'{args.split}_pos.tsv'), args.tsv_fmt))]
+    pos = [(t[0][0].split(' [CI] '), t[1]) for k, t in enumerate(yield_sources_and_targets(os.path.join(args.data_dir, f'{args.split}_pos.tsv')))]
     assert(len(pos) == len(outs))
 
     pt_ids = []
@@ -152,8 +152,6 @@ if __name__ == '__main__':
     ap.add_argument('--data_dir', default='canard')
     ap.add_argument('--lem', action='store_true')
     ap.add_argument('--cparse', action='store_true')
-    ap.add_argument('--tsv_fmt', default='wikisplit')
-    ap.add_argument('--dparse', action='store_true')
     ap.add_argument('--load_all', action='store_true')
     args = ap.parse_args()
     main(args)

@@ -9,7 +9,7 @@ from nltk import Tree
 from tqdm import tqdm
 
 from utils import eprint, _read_leaf, write_lst, concat_path, align_phr_tgt
-from utils_data import yield_sources_and_targets, filter_sources_and_targets
+from utils_data import filter_sources_and_targets
 
 
 def load_examples(args):
@@ -33,23 +33,6 @@ def load_examples(args):
         with open(phr_tgt_sps_f, 'w', encoding='utf8') as f:
             json.dump(sps_lst, f)
     return outs_k, outs
-
-
-def lemmatize(outs, lem_f):
-    """Lemmatize context, target pairs in `outs`."""
-    import stanza
-    from stanza.server import CoreNLPClient
-    if not os.path.isdir('/home/lisjin/stanza_resources'):
-        stanza.download('en')
-    if not os.path.isdir('/home/lisjin/stanza_corenlp'):
-        stanza.install_corenlp()
-
-    with CoreNLPClient(annotators=['tokenize','ssplit','pos','lemma'], memory=\
-        '12G', endpoint='http://localhost:9001', be_quiet=True) as client:
-        lems = [' '.join([word.lemma for sentence in client.annotate(s)\
-                .sentence for word in sentence.token]) for o in outs for s in o]
-        with open(lem_f, 'w', encoding='utf8') as f:
-            json.dump(lems, f)
 
 
 def cparse_load(outs, outs_k, args):
@@ -109,9 +92,6 @@ def cparse(outs, outs_k, args):
 
 def main(args):
     outs_k, outs = load_examples(args)
-
-    if args.lem:
-        lemmatize(outs, concat_path(args, 'unmatch_lems.json'))
     if args.cparse:
         cparse(outs, outs_k, args)
 
@@ -120,9 +100,6 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('--split', default='train', choices=['train', 'dev', 'test'])
     ap.add_argument('--data_dir', default='canard')
-    ap.add_argument('--lem', action='store_true')
     ap.add_argument('--cparse', action='store_true')
-    ap.add_argument('--tsv_fmt', default='wikisplit')
-    ap.add_argument('--dparse', action='store_true')
     args = ap.parse_args()
     main(args)

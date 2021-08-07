@@ -23,7 +23,7 @@ def get_phrs_add(args):
         cids = [list(map(int, l.rstrip().split(','))) for l in f]
     with open(concat_path(args, args.ctx_sps_f.format(args.cluster_method))) as f:
         ctx_sps = json.load(f)
-    rules = read_lst(concat_path(args, args.rule_f.format(args.cluster_method)))
+    rules = read_lst(os.path.join(args.data_dir, 'train', args.rule_f.format(args.cluster_method)))
 
     with open(concat_path(args, 'unfound_phrs.json'), encoding='utf8') as f:
         unfound_phrs = json.load(f)
@@ -63,7 +63,7 @@ def proc_examples(args):
     num_converted = 0
     tags, sens, cnv_ids = [], [], []
     for i, (sources, target) in enumerate(yield_sources_and_targets(
-        os.path.join(args.data_dir, f'{args.split}.tsv'), args.tsv_fmt)):
+        os.path.join(args.data_dir, f'{args.split}.tsv'))):
         example, ret = builder.build_bert_example(
                 sources, target,
                 use_arbitrary_target_ids_for_infeasible_examples=not is_train,
@@ -75,7 +75,7 @@ def proc_examples(args):
             tgts.append(target)
         elif ret:  # unfound_phrs
             read_dct[i] = ret
-        if is_train and (example is None or example.features["can_convert"]==False):
+        if is_train and (example is None or not example.features["can_convert"]):
             continue
         elif is_train:
             cnv_ids.append(i)
@@ -112,7 +112,6 @@ if __name__ == '__main__':
     ap.add_argument('--rule_f', default='rule_{}.txt')
     ap.add_argument('--hyp_f', default='snts_{}_{}.txt')
     ap.add_argument('--vocab_f', default='uncased_L-12_H-768_A-12/vocab.txt')
-    ap.add_argument('--tsv_fmt', default='wikisplit')
     ap.add_argument('--n_proc', type=int, default=min(4, os.cpu_count()))
     ap.add_argument('--do_lower_case', default=False)
     ap.add_argument('--write', action='store_true')

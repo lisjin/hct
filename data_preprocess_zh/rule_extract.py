@@ -15,7 +15,7 @@ from scipy.cluster.hierarchy import linkage, fcluster
 from sklearn.cluster import AffinityPropagation
 
 from fmatch_lem import fmatch_single
-from utils import fromstring, read_lem, read_expand, concat_path, write_lst
+from utils import fromstring, read_lem, read_expand, concat_path, read_lst, write_lst
 from utils_data import filter_sources_and_targets
 
 
@@ -156,10 +156,6 @@ def exact_match(ctx, phr):
     return -1, 0
 
 
-def sanitize_str(x):
-    return re.sub('\s\s+', ' ', x)
-
-
 def read_fs(args):
     with Pool(args.n_proc) as p:
         with open(concat_path(args, 'cpts_tgt.txt'), encoding='utf8') as f:
@@ -178,7 +174,7 @@ def read_fs(args):
 
     with open(concat_path(args, 'unfound_phrs.json'), encoding='utf8') as f:
         outs_k = set([int(k) for k in json.load(f).keys()])
-    ctxs_orig, tgts_orig = map(list, zip(*[map(sanitize_str, x[1:]) for x in filter_sources_and_targets(
+    ctxs_orig, tgts_orig = map(list, zip(*[x[1:] for x in filter_sources_and_targets(
         os.path.join(args.data_dir, f'{args.split}.tsv'), outs_k)]))
     _, ctxs_orig, _, phrs_orig, _ = read_expand(phr_tgt_sps_f, ctxs=ctxs_orig, tgts=tgts_orig)
     if not lem_exist:
@@ -210,10 +206,14 @@ def count_rules(srs):
     nr = len(rules)
     print(f'Found {nr} rules')
 
-    rstrs = [t[0] for t in rules.most_common()]  # sort by decreasing frequency
-    rstr2i = {rstr: i for i, rstr in enumerate(rstrs)}
+    rstrs = []
+    rstr2i = {}
+    for i, t in enumerate(rules.most_common()):  # sort by decreasing frequency
+        rstrs.append(rstr2orig[t[0]])
+        rstr2i[i] = rstrs[-1]
+    srs_str = rstr_i[:]
     rstr_i = np.array([rstr2i.get(rstr, -1) for rstr in rstr_i])
-    return rules, rstr_i, rstrs, rstr2orig, rstr2i, nr
+    return rules, rstr_i, rstrs, rstr2i, srs_str, nr
 
 
 def get_triu_dist(rstrs, nr):
@@ -269,21 +269,17 @@ def get_mask_rep(n_mask, mask):
     return ' '.join([mask] * n_mask)
 
 
-def filter_write_clusters(srs, labels, rules, rstrs, rstr_i, rstr2orig, rstr2i, args):
+def filter_clusters(args, srs, labels, rules, rstrs, rstr_i, rstr2i, single_mask_rep):
 
     def get_mask_id(mask_rep):
         nonlocal rstr2i
         nonlocal rstrs
-        nonlocal rstr2orig
         if mask_rep not in rstr2i:
             rstr2i[mask_rep] = len(rstrs)
             rstrs.append(mask_rep)
-            rstr2orig[mask_rep] = mask_rep
         return rstr2i[mask_rep]
 
     clusters = {}
-    nd = sum(rules.values())
-    thresh_cnt = floor(nd * args.min_rule_prop)
     n_slots_dct = {}
     for k, v in enumerate(labels):
         if v not in n_slots_dct:
@@ -291,41 +287,40 @@ def filter_write_clusters(srs, labels, rules, rstrs, rstr_i, rstr2orig, rstr2i, 
         k_slots = get_str_slots(rstrs[k], args.mask) if k not in n_slots_dct\
                 else n_slots_dct[k]
         if k_slots != n_slots_dct[v]:
-            if rules[rstrs[k]] >= thresh_cnt or k_slots == 0:
-                v = k
-            else:
+            if k_slots > 0:
                 mask_rep = get_mask_rep(k_slots, args.mask)
                 v = get_mask_id(mask_rep)
+            else:
+                v = k
             if v not in n_slots_dct:
                 n_slots_dct[v] = k_slots
         clusters.setdefault(v, []).append(k)
 
     cov = 0.
+    nd = sum(rules.values())
+    thresh_cnt = floor(nd * args.min_rule_prop)
     rstrs_uniq = {}
+    rstr_i_old = rstr_i[:]
     for p, clst in clusters.items():
         cur_cov = sum([rules[rstrs[c]] for c in clst])
-        mask = np.zeros_like(rstr_i, dtype=bool)
-        for c in clst:
-            mask[rstr_i == c] = 1
+        val = -1
         if cur_cov >= thresh_cnt:
             cov += cur_cov
             rstrs_uniq[p] = len(rstrs_uniq)
-            rstr_i[mask] = rstrs_uniq[p]
-        else:
-            clusters[p] = None
-            rstr_i[mask] = rstrs_uniq[rstr2i[get_mask_rep(n_slots_dct[p], args.mask)]] if n_slots_dct[p] > 0 else -1
+            val = rstrs_uniq[p]
+        elif n_slots_dct[p] > 0:
+            p = get_mask_id(get_mask_rep(n_slots_dct[p], args.mask))
+            val = rstrs_uniq.setdefault(p, len(rstrs_uniq))
+        for c in clst:
+            rstr_i[rstr_i_old == c] = val
     cov /= nd
-    single_rule_id = get_mask_id(get_mask_rep(1, args.mask))
+
+    single_rule_id = get_mask_id(single_mask_rep)
     if single_rule_id not in rstrs_uniq:
-        rstrs_uniq[single_rule_id] = None
-
-    rstrs[:] = [rstr2orig[rstrs[p]] for p in rstrs_uniq.keys()]
+        rstrs_uniq[single_rule_id] = len(rstrs_uniq)
+    rstrs[:] = [rstrs[p] for p in rstrs_uniq.keys()]
     print(f'Reduced to {len(rstrs)} rules with {cov:.4f} coverage')
-
-    rule_sps = [(str(ri), *cs) if ri > -1 else None for ri, cs in zip(rstr_i, [sr.ctx_spans for sr in srs])]
-    with open(concat_path(args, f'rule_sps_{args.cluster_method}.json'), 'w', encoding='utf8') as f:
-        json.dump(rule_sps, f)
-    write_lst(concat_path(args, f'rule_{args.cluster_method}.txt'), rstrs)
+    return rstr_i, rstrs, rstrs_uniq.keys()
 
 
 def get_spans(r):
@@ -333,6 +328,49 @@ def get_spans(r):
         return [], []
     slot_spans, ctx_spans = zip(*[(r2[:2], r2[-1]) for r2 in r])
     return slot_spans, list(ctx_spans)
+
+
+def get_cluster_lb_ub(dist, cluster_indices, labels):
+    cluster_lb_ub = []
+    for ci in cluster_indices:
+        sample_indices = np.nonzero(labels == ci)[0]
+        if ci < dist.shape[0]:
+            sample_dists = dist[ci, sample_indices]
+            mn, std = sample_dists.mean(), sample_dists.std()
+            sample_tup = (mn - std, mn + std)
+        else:
+            sample_tup = (-1., 1.)
+        cluster_lb_ub.append(f'{sample_tup[0]:.4f}\t{sample_tup[1]:.4f}')
+    return cluster_lb_ub
+
+
+def label_eval(args, srs, single_mask_rep):
+    train_rstrs = read_lst(os.path.join(args.data_dir, 'train', f'rule_{args.cluster_method}.txt'))
+    with open(os.path.join(args.data_dir, 'train', f'rule_range_{args.cluster_method}.txt'), 'r') as f:
+        cluster_lb_ub = [tuple(map(float, l.strip().split())) for l in f.readlines()]
+    rstrs = [str(sr) for sr in srs]
+    tups = ((rstr, train_rstr) for rstr in rstrs for train_rstr in train_rstrs)
+    nc = len(train_rstrs)
+    with Pool(args.n_proc) as p:
+        dist = np.array(p.map(lcs_dist, *zip(*tups))).reshape(-1, nc)
+    labels = dist.argmin(1).tolist()
+    rstr_i = []
+    single_mask_i = -1
+    for i, train_rstr in enumerate(train_rstrs):
+        if train_rstr == single_mask_rep:
+            single_mask_i = i
+            break
+    assert(single_mask_i > -1)
+    for i, lbl in enumerate(labels):
+        val = -1
+        if cluster_lb_ub[lbl][0] <= dist[i, lbl] <= cluster_lb_ub[lbl][1]:
+            val = lbl
+        else:
+            k_slots = get_str_slots(rstrs[i], args.mask)
+            if k_slots > 0:
+                val = single_mask_i
+        rstr_i.append(val)
+    return rstr_i
 
 
 def main(args):
@@ -343,23 +381,39 @@ def main(args):
     _, sps_out, _ = zip(*res)
     srs = [sri(phr, phr_orig, *get_spans(r)) for phr, phr_orig, r in zip(phrs, phrs_orig, sps_out)]
 
-    rules, rstr_i, rstrs, rstr2orig, rstr2i, nr = count_rules(srs)
-    triu_dist = get_triu_dist(rstrs, nr)
-    if args.cluster_method == 'thresh':
-        dist_thresh = np.percentile(triu_dist, args.perc_q)
-        labels = thresh_cluster(triu_dist, dist_thresh, nr)
-    elif args.cluster_method == 'affinity':
-        # https://scikit-learn.org/stable/modules/generated/sklearn.cluster.AffinityPropagation.html
-        dist = triu_to_full(triu_dist, nr)
-        af = AffinityPropagation(affinity='precomputed', random_state=None).fit(-dist)
-        labels = af.labels_
-    elif args.cluster_method == 'hierarch':
-        # https://docs.scipy.org/doc/scipy/reference/cluster.hierarchy.html
-        Z = linkage(triu_dist, method='ward')
-        dist_thresh = np.percentile(triu_dist, args.perc_q)
-        labels = fcluster(Z, t=dist_thresh, criterion='distance')
+    single_mask_rep = get_mask_rep(1, args.mask)
+    if args.split == 'train':
+        rules, rstr_i, rstrs, rstr2i, srs_str, nr = count_rules(srs)
+        triu_dist = get_triu_dist(rstrs, nr)
+        if args.cluster_method == 'thresh':
+            dist_thresh = np.percentile(triu_dist, args.perc_q)
+            labels = thresh_cluster(triu_dist, dist_thresh, nr)
+        elif args.cluster_method == 'affinity':
+            # https://scikit-learn.org/stable/modules/generated/sklearn.cluster.AffinityPropagation.html
+            dist = triu_to_full(triu_dist, nr)
+            af = AffinityPropagation(affinity='precomputed', random_state=None).fit(-dist)
+            labels = af.labels_
+        elif args.cluster_method == 'hierarch':
+            # https://docs.scipy.org/doc/scipy/reference/cluster.hierarchy.html
+            Z = linkage(triu_dist, method='ward')
+            dist_thresh = np.percentile(triu_dist, args.perc_q)
+            labels = fcluster(Z, t=dist_thresh, criterion='distance')
 
-    filter_write_clusters(srs, labels, rules, rstrs, rstr_i, rstr2orig, rstr2i, args)
+        rstr_i, rstrs, cluster_indices = filter_clusters(args, srs, labels, rules, rstrs,
+                rstr_i, rstr2i, single_mask_rep)
+        write_lst(concat_path(args, f'rule_{args.cluster_method}.txt'), rstrs)
+
+        if args.cluster_method == 'affinity' and args.split == 'train':
+            cluster_lb_ub = get_cluster_lb_ub(dist, cluster_indices, labels)
+            write_lst(concat_path(args, f'rule_range_{args.cluster_method}.txt'),
+                    cluster_lb_ub)
+    else:
+        rstr_i = label_eval(args, srs, single_mask_rep)
+
+    rule_sps = [(str(ri), *cs) if ri > -1 else None for ri, cs in zip(rstr_i,
+        [sr.ctx_spans for sr in srs])]
+    with open(concat_path(args, f'rule_sps_{args.cluster_method}.json'), 'w', encoding='utf8') as f:
+        json.dump(rule_sps, f)
 
 
 if __name__ == '__main__':

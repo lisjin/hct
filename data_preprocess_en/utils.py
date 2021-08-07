@@ -142,7 +142,7 @@ def compute_bleu(refs=None, hyps=None, args=None, hyp_path=None):
     from utils_data import yield_sources_and_targets
     if refs is None:
         refs = [target for _, target in yield_sources_and_targets(
-            os.path.join(args.data_dir, f'{args.split}.tsv'), args.tsv_fmt)]
+            os.path.join(args.data_dir, f'{args.split}.tsv'))]
     if hyps is None:
         with open(hyp_path, encoding='utf8') as f:
             hyps = [l.rstrip() for l in f]
