@@ -35,21 +35,6 @@ def load_examples(args):
     return outs_k, outs
 
 
-def cparse_load(outs, outs_k, args):
-    pts_uniq = []
-    seen = {}
-    cpts_uniq_f = concat_path(args, 'cpts_uniq.txt')
-    if os.path.isfile(cpts_uniq_f):
-        with open(cpts_uniq_f, encoding='utf8') as f:
-            pts_uniq = [l.rstrip() for l in f]
-        for i in outs_k:
-            for s in outs[i][0].split(' | '):
-                if s not in seen:
-                    seen[s] = len(seen)
-        assert(len(seen) == len(pts_uniq))
-    return pts_uniq, seen
-
-
 def cparse(outs, outs_k, args):
     nlp = spacy.load('zh_core_web_md')
     nlp.add_pipe(benepar.BeneparComponent('benepar_zh2'))
@@ -69,7 +54,7 @@ def cparse(outs, outs_k, args):
         return pt_str
 
     pt_ids = []
-    pts_uniq, seen = cparse_load(outs, outs_k, args)
+    pts_uniq, seen = [], {}
     pts_src, pts_tgt = [], []
     for i in tqdm(range(len(outs))):
         ids = []

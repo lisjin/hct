@@ -10,6 +10,8 @@ from nltk import Tree
 sys.path.insert(1, os.path.join(sys.path[0], '..'))
 from score import Metrics
 
+punct_set = set([',', '?', '!'])
+
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)

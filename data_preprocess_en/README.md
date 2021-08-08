@@ -1,5 +1,6 @@
 6/24: Modified `allennlp_models/structured_prediction/predictors/constituency_parser.py` by adding `predict_w_pos` to avoid double spacy tokenization.
-    ```
+
+    ```python
     def predict_w_pos(self, sentence: str, pos: str) -> JsonDict:
         return self.predict_json({"sentence": sentence, "pos": pos})
 

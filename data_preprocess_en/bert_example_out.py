@@ -50,7 +50,7 @@ class BertExample(object):
 class BertExampleBuilder(object):
     """Builder class for BertExample objects."""
 
-    def __init__(self, label_map, vocab_file, do_lower_case, converter, rules, mask):
+    def __init__(self, label_map, vocab_file, do_lower_case, converter, rules, mask, write_partial_match):
         """Initializes an instance of BertExampleBuilder.
 
         Args:
@@ -71,6 +71,7 @@ class BertExampleBuilder(object):
         self._rules = rules
         self._single_rule_id = -1
         self._mask = mask
+        self._write_partial_match = write_partial_match
         if rules:
             for i, rule in enumerate(rules):
                 if rule == mask:
@@ -158,7 +159,8 @@ class BertExampleBuilder(object):
                         start.append(-1)
                         end.append(-1)
                         rule.append(-1)
-                        can_convert = False
+                        if not self._write_partial_match:
+                            can_convert = False
                 else:
                     start.append(s_ind)
                     end.append(s_ind + len(phrase) - 1)

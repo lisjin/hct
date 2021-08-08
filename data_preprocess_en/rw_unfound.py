@@ -58,7 +58,10 @@ def proc_examples(args):
     label_map = read_label_map(os.path.join(args.data_out_dir, 'label_map.txt'))
     converter = tagging_converter.TaggingConverter(
             tagging_converter.get_phrase_vocabulary_from_label_map(label_map))
-    builder = bert_example.BertExampleBuilder(label_map, args.vocab_f, args.do_lower_case, converter, rules=rules if args.write else None, mask=args.mask)
+    builder = bert_example.BertExampleBuilder(
+            label_map, args.vocab_f, args.do_lower_case, converter,
+            rules=rules if args.write else None, mask=args.mask,
+            write_partial_match=args.write_partial_match)
     is_train = args.split == 'train'
     num_converted = 0
     tags, sens, cnv_ids = [], [], []
@@ -119,5 +122,6 @@ if __name__ == '__main__':
     ap.add_argument('--max_sp_width', type=int, default=3)
     ap.add_argument('--cluster_method', default='affinity', choices=['affinity', 'thresh', 'hierarch'])
     ap.add_argument('--mask', default='_')
+    ap.add_argument('--write_partial_match', type=int, default=1)
     args = ap.parse_args()
     main(args)
