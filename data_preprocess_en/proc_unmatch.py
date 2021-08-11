@@ -12,6 +12,12 @@ from utils import eprint, _read_leaf, write_lst, concat_path, align_phr_tgt
 from utils_data import yield_sources_and_targets, filter_sources_and_targets
 
 
+def load_task_tup(source, target):
+    ctx, src = source.split(' [CI] ')
+    ctx = ctx.replace('[SEP]', '|')  # Prevent tokenizing [SEP] tag
+    return (ctx, target, src)
+
+
 def load_examples(args):
     """Return list of context, target pairs. If file DNE, write a JSON list of
     target spans corresponding to unmatched phrases.
@@ -23,9 +29,7 @@ def load_examples(args):
         outs_k = unmatch_dct.keys()
         outs = []
         for k, source, target in filter_sources_and_targets(os.path.join(args.data_dir, f'{args.split}.tsv'), outs_k):
-            # Prevent tokenizing [SEP] tag by replacing it with |
-            ctx = source.split(' [CI] ')[0].replace('[SEP]', '|')
-            outs.append((ctx, target, source))
+            outs.append(load_task_tup(source, target))
 
             if sps_lst is not None:
                 sps_lst.append(align_phr_tgt(unmatch_dct[k], target))
@@ -45,9 +49,7 @@ def load_all_examples(args):
     outs = []
     for sources, target in yield_sources_and_targets(
         os.path.join(args.data_dir, f'{args.split}.tsv')):
-        ctx, src = sources[0].split(' [CI] ')
-        ctx = ctx.replace('[SEP]', '|')
-        outs.append((ctx, target, src))
+        outs.append(load_task_tup(sources[0]), target)
     return outs_k, outs
 
 
@@ -63,24 +65,9 @@ def lemmatize(outs, lem_f):
     with CoreNLPClient(annotators=['tokenize','ssplit','pos','lemma'], memory=\
         '12G', endpoint='http://localhost:9001', be_quiet=True) as client:
         lems = [' '.join([word.lemma for sentence in client.annotate(s)\
-                .sentence for word in sentence.token]) for o in outs for s in o]
+                .sentence for word in sentence.token]) for o in outs for s in o[:2]]
         with open(lem_f, 'w', encoding='utf8') as f:
             json.dump(lems, f)
-
-
-def cparse_load(outs, outs_k, args):
-    pts_uniq = []
-    seen = {}
-    cpts_uniq_f = concat_path(args, 'cpts_uniq.txt')
-    if os.path.isfile(cpts_uniq_f):
-        with open(cpts_uniq_f, encoding='utf8') as f:
-            pts_uniq = [l.rstrip() for l in f]
-        for i in outs_k:
-            for s in outs[i][0].split(' | '):
-                if s not in seen:
-                    seen[s] = len(seen)
-        assert(len(seen) == len(pts_uniq))
-    return pts_uniq, seen
 
 
 def cparse(outs, outs_k, args):
@@ -107,11 +94,11 @@ def cparse(outs, outs_k, args):
                 return ''
         return pt_str
 
-    pos = [(t[0][0].split(' [CI] '), t[1]) for k, t in enumerate(yield_sources_and_targets(os.path.join(args.data_dir, f'{args.split}_pos.tsv')))]
+    pos = [(src.split(' [CI] '), tgt) for _, src, tgt in filter_sources_and_targets(os.path.join(args.data_dir, f'{args.split}.tsv'), outs_k)]
     assert(len(pos) == len(outs))
 
     pt_ids = []
-    pts_uniq, seen = cparse_load(outs, outs_k, args)
+    pts_uniq, seen = [], {}
     pts_src, pts_tgt = [], []
     for i in tqdm(range(len(outs))):
         ids = []
@@ -127,10 +114,9 @@ def cparse(outs, outs_k, args):
         pts_tgt.append(try_pred(outs[i][1], pos[i][1]))
 
     assert(len(pt_ids) == len(pts_tgt))
-    all_pref = int(args.load_all)
-    write_lst(concat_path(args, f'cpt_ids{all_pref}.txt'), pt_ids)
-    write_lst(concat_path(args, f'cpts_uniq{all_pref}.txt'), pts_uniq)
-    write_lst(concat_path(args, f'cpts_tgt{all_pref}.txt'), pts_tgt)
+    write_lst(concat_path(args, f'cpt_ids.txt'), pt_ids)
+    write_lst(concat_path(args, f'cpts_uniq.txt'), pts_uniq)
+    write_lst(concat_path(args, f'cpts_tgt.txt'), pts_tgt)
     write_lst(concat_path(args, 'cpts_src.txt'), pts_src)
 
 

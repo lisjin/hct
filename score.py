@@ -5,8 +5,8 @@ import sys
 
 from nltk.translate.bleu_score import sentence_bleu
 from nltk.translate.bleu_score import SmoothingFunction
-from rouge import Rouge
 from nltk.translate.bleu_score import corpus_bleu
+from rouge import Rouge
 
 
 class Metrics(object):
@@ -45,43 +45,25 @@ class Metrics(object):
     def rouge_score(references, candidates):
         """
         rouge计算，NLG任务语句生成，词语的recall
-        https://github.com/pltrdy/rouge
         :param references: list string
         :param candidates: list string
         :return:
         """
-        rouge = Rouge()
+        rouge = Rouge(metrics=['rouge-n', 'rouge-l'],
+                max_n=3,
+                apply_avg=True)
 
         # 遍历计算rouge
-        rouge1s = []
-        rouge2s = []
-        rougels = []
-        for ref, cand in zip(references, candidates):
-            #ref = ' '.join(list(ref))
-            #cand = ' '.join(list(cand))
-            ref = ' '.join(ref.split())
-            cand = ' '.join(cand.split())
-            try:
-                rouge_score = rouge.get_scores([cand], [ref])
-            except:
-                print(sys.exc_info()[0])
-            rouge_1 = rouge_score[0]["rouge-1"]['f']
-            rouge_2 = rouge_score[0]["rouge-2"]['f']
-            rouge_l = rouge_score[0]["rouge-l"]['f']
-
-            rouge1s.append(rouge_1)
-            rouge2s.append(rouge_2)
-            rougels.append(rouge_l)
+        refs = [' '.join(x.split()) for x in references]
+        cands = [' '.join(x.split()) for x in candidates]
+        scores = rouge.get_scores(cands, refs)
 
         # 计算平均值
-        rouge1_average = sum(rouge1s) / len(rouge1s)
-        rouge2_average = sum(rouge2s) / len(rouge2s)
-        rougel_average = sum(rougels) / len(rougels)
+        r1_avg, r2_avg, rl_avg = scores['rouge-1']['f'], scores['rouge-2']['f'], scores['rouge-l']['f']
 
         # 输出
-        print("rouge_1: %.3f\trouge_2: %.3f\trouge_l: %.3f" \
-                % (rouge1_average, rouge2_average, rougel_average))
-        return (rouge1_average, rouge2_average, rougel_average)
+        print(f"rouge_1: {r1_avg:.3f}\trouge_2: {r2_avg:.3f}\trouge_l: {rl_avg:.3f}")
+        return (r1_avg, r2_avg, rl_avg)
 
 
 if __name__ == '__main__':

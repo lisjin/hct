@@ -1,0 +1,19 @@
+{
+    "bert_class": "bert-base-uncased",
+    "full_finetuning": true,
+    "max_len": 360,
+    "max_sp_len": 1,
+    "rl_ratio": 5e-1,
+
+    "learning_rate": 1e-5,
+    "weight_decay": 1e-2,
+    "clip_grad": 3,
+    "grad_accum_steps": 1,
+
+    "batch_size": 16,
+    "epoch_num": 50,
+    "min_epoch_num": 20,
+    "warmup_epochs": 3,
+    "patience": 2e-2,
+    "patience_num": 3
+}

@@ -87,8 +87,10 @@ class SingleHeadedAttention(nn.Module):
             self.relative_positions_embeddings = nn.Embedding(
                     vocab_size, self.model_dim)
 
-            def reset_parameters(self):
-                nn.init.normal_(self.linear_keys.weight, std=.02)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.normal_(self.linear_keys.weight, std=.02)
         nn.init.normal_(self.linear_values.weight, std=.02)
         nn.init.normal_(self.linear_query.weight, std=.02)
         nn.init.normal_(self.final_linear.weight, std=.02)

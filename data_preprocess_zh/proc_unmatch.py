@@ -24,8 +24,9 @@ def load_examples(args):
         outs = []
         for k, source, target in filter_sources_and_targets(os.path.join(args.data_dir, f'{args.split}.tsv'), outs_k):
             # Prevent tokenizing [SEP] tag by replacing it with |
-            ctx = source.split(' [CI] ')[0].replace('[SEP]', '|')
-            outs.append((ctx, target, source))
+            ctx, src = source.split(' [CI] ')
+            ctx = ctx.replace('[SEP]', '|')
+            outs.append((ctx, target, src))
 
             if sps_lst is not None:
                 sps_lst.append(align_phr_tgt(unmatch_dct[k], target))
