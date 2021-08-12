@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-python proc_corpus.py  # canard/<split>.tsv and canard/<split>_pos.tsv
+
+# canard/<split>.tsv and canard/<split>_pos.tsv
+# canard/train_valid_test_wo_context.tsv
+python proc_corpus_canard.py --with_context --wo_context
+
 sh phrase_voc_optimization.sh  # canard_out/label_map.txt
 
 python proc_corpus.py --use_context  # canard/train_valid_test_wo_context.tsv

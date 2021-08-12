@@ -79,17 +79,18 @@ def wo_context(args, std_sen):
 
 
 def main(args):
-    tokenizer = SpacyTokenizer(language='en_core_web_sm')
+    tokenizer = SpacyTokenizer(language='en_core_web_md')
     std_sen_ = partial(std_sen, tokenizer=tokenizer)
-    if args.use_context:
+    if args.with_context:
         with_context(args, std_sen_)
-    else:
+    if args.wo_context:
         wo_context(args, std_sen_)
 
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('--use_context', action='store_true')
+    ap.add_argument('--with_context', action='store_true')
+    ap.add_argument('--wo_context', action='store_true')
     ap.add_argument('--inp_dir', default='canard')
     ap.add_argument('--splits', default=('train', 'dev', 'test'))
     ap.add_argument('--n_proc', type=int, default=min(4, os.cpu_count()))

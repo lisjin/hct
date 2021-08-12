@@ -94,6 +94,7 @@ class BertForSequenceTagging(nn.Module):
 
         self.rl_model = config.rl_model
         self.rl_ratio = config.rl_ratio
+        self.eps = 1e-45
         self.bleu_fn = partial(sentence_bleu, weights=(.25,) * 4,
                 smoothing_function=cc.method3)
 
@@ -167,7 +168,8 @@ class BertForSequenceTagging(nn.Module):
             max_r = max(max_r, rewards[-1])
 
         rewards = torch.as_tensor(rewards, device=logits.device).unsqueeze(1)
-        rewards = (rewards - min_r) / (max_r - min_r)
+        rewards_ = (rewards - min_r) / (max_r - min_r)
+        rewards = torch.where(rewards_.isnan(), rewards, rewards_)
         loss_action_rl = self.rl_loss(samples_action_prob.squeeze(2), act_loss_mask, rewards)
         loss_rule_rl = self.rl_loss(samples_rule_prob.squeeze(2), act_loss_mask, rewards)
 
@@ -221,11 +223,11 @@ class BertForSequenceTagging(nn.Module):
     def reshape_sp(inp, nview, perm):
         return inp.view(*nview).permute(*perm)
 
-    @staticmethod
-    def rl_loss(prob, mask, rewards):
+    def rl_loss(self, prob, mask, rewards):
         loss = -F.log_softmax(prob + safe_log(mask), -1)
         loss *= rewards * mask
-        return loss.sum() / mask.sum()
+        msum = mask.sum()
+        return loss.sum() / torch.clamp(mask.sum(), min=self.eps)
 
     @staticmethod
     def gather_embed(inp_emb, inp_idx, inp_mask, dim=1):
