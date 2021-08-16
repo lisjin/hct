@@ -11,8 +11,8 @@ from itertools import chain
 from pathos.multiprocessing import ProcessingPool as Pool
 
 from tagging import EditingTask
-from utils import fromstring, write_lst, read_lst, concat_path, compute_bleu
-from utils_data import read_label_map, yield_sources_and_targets
+from utils import fromstring, write_lst, read_lst, concat_path, compute_bleu, load_data_rng
+from utils_data import read_label_map, filter_sources_and_targets
 
 
 def get_phrs_add(args):
@@ -65,10 +65,12 @@ def proc_examples(args):
     is_train = args.split == 'train'
     num_converted = 0
     tags, sens, cnv_ids = [], [], []
-    for i, (sources, target) in enumerate(yield_sources_and_targets(
-        os.path.join(args.data_dir, f'{args.split}.tsv'))):
+    keys = range(*load_data_rng(args.domain_rng_path, 'train', 'calling')) if\
+            args.split == 'train' and args.domain_rng_path else None
+    for i, sources, target in filter_sources_and_targets(
+            os.path.join(args.data_dir, f'{args.split}.tsv'), keys):
         example, ret = builder.build_bert_example(
-                sources, target,
+                (sources,), target,
                 use_arbitrary_target_ids_for_infeasible_examples=not is_train,
                 phrs_new=phrs_add.get(i, []) if args.write else None,
                 rules_new=rules_add.get(i, []) if args.write else None,
@@ -87,11 +89,12 @@ def proc_examples(args):
         num_converted += 1
 
     if args.write:
-        hyp_path = concat_path(args, args.hyp_f.format(args.mmode, args.tmode))
+        domain_suf = '_calling' if args.domain_rng_path else ''
+        hyp_path = concat_path(args, args.hyp_f.format(args.mmode, args.tmode, domain_suf))
         write_lst(hyp_path, snts)
-        write_lst(concat_path(args, 'tags.txt', data_out=True), tags)
-        write_lst(concat_path(args, 'sentences.txt', data_out=True), sens)
-        with open(concat_path(args, 'cnv_ids.json'), 'w') as f:
+        write_lst(concat_path(args, f'tags{domain_suf}.txt', data_out=True), tags)
+        write_lst(concat_path(args, f'sentences{domain_suf}.txt', data_out=True), sens)
+        with open(concat_path(args, f'cnv_ids{domain_suf}.json'), 'w') as f:
             json.dump(cnv_ids, f)
         compute_bleu(refs=tgts, hyps=snts)
     else:
@@ -113,7 +116,7 @@ if __name__ == '__main__':
     ap.add_argument('--tmode', default='bup')
     ap.add_argument('--ctx_sps_f', default='rule_sps_{}.json')
     ap.add_argument('--rule_f', default='rule_{}.txt')
-    ap.add_argument('--hyp_f', default='snts_{}_{}.txt')
+    ap.add_argument('--hyp_f', default='snts_{}_{}{}.txt')
     ap.add_argument('--vocab_f', default='uncased_L-12_H-768_A-12/vocab.txt')
     ap.add_argument('--n_proc', type=int, default=min(4, os.cpu_count()))
     ap.add_argument('--do_lower_case', default=False)
@@ -123,5 +126,6 @@ if __name__ == '__main__':
     ap.add_argument('--cluster_method', default='affinity', choices=['affinity', 'thresh', 'hierarch'])
     ap.add_argument('--mask', default='_')
     ap.add_argument('--write_partial_match', type=int, default=1)
+    ap.add_argument('--domain_rng_path', help='Path to JSON file of domain index ranges per data split')
     args = ap.parse_args()
     main(args)

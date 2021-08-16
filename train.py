@@ -7,6 +7,9 @@ import torch
 import utils
 import torch.nn as nn
 import transformers
+
+from utils import dutils
+
 transformers.logging.set_verbosity(transformers.logging.ERROR)
 
 from tqdm import trange
@@ -108,8 +111,11 @@ def main(args):
     bert_class = params.bert_class
     params.rules, params.rule_slot_cnts = load_rules(args.rule_path)
     data_loader = DataLoader(args.dataset, bert_class, params)
-    train_data = data_loader.load_data('train')
-    val_data = data_loader.load_data('dev')
+    rng = dutils.load_data_rng(args.domain_rng_path, 'train', 'calling')\
+            if args.domain_rng_path else None
+    domain_suf = '_calling' if args.domain_rng_path else ''
+    train_data = data_loader.load_data('train', rng=rng, domain_suf=domain_suf)
+    val_data = data_loader.load_data('dev', domain_suf=domain_suf)
     params.train_size = train_data['size']
     params.val_size = val_data['size']
 
@@ -142,8 +148,9 @@ if __name__ == '__main__':
     parser.add_argument('--model', help="Directory containing the model")
     parser.add_argument('--gpu', default='0', help="gpu device")
     parser.add_argument('--bleu_rl', action='store_true')
-    parser.add_argument('--seed', type=int, default=2020, help="random seed for initialization")
+    parser.add_argument('--seed', type=int, default=2020, help="Random seed for initialization")
     parser.add_argument('--restore_dir', default=None,
-                        help="Optional, name of the directory containing weights to reload before training, e.g., 'experiments/conll/'")
+                        help="Optional, Directory containing weights to reload before training, e.g., 'experiments/conll/'")
+    parser.add_argument('--domain_rng_path', help='Path to JSON file of domain index ranges per data split')
     args = parser.parse_args()
     main(args)

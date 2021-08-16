@@ -1,8 +1,4 @@
-from __future__ import absolute_import
-from __future__ import division
-
-from __future__ import print_function
-
+from __future__ import absolute_import, division, print_function
 from typing import Iterator, Mapping, Sequence, Text, Tuple
 
 import json
@@ -70,7 +66,7 @@ def yield_sources_and_targets(input_file):
 
 def filter_sources_and_targets(input_file, keys):
     for i, (sources, target) in enumerate(_yield_wikisplit_examples(input_file)):
-        if i in keys:
+        if keys is None or i in keys:
             yield i, sources[0], target
 
 

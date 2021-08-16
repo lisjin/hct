@@ -130,19 +130,22 @@ class DataLoader(object):
         sentence = self.tokenizer.convert_tokens_to_ids(bert_tokens)
         return sentence, bert_label_action, bert_label_start, bert_label_end, bert_seq_width, bert_rule, tgt, src_indices
 
-    def load_sentences_tags(self, sentences_file, tags_file, d, n_proc=4):
+    def load_sentences_tags(self, sentences_file, tags_file, d, n_proc=4, rng=None):
         """Loads sentences and tags from their corresponding files.
         Maps tokens and tags to their indices and stores them in the provided dict d.
         """
         with open(sentences_file, 'r') as sen_f, open(tags_file, 'r') as tag_f:
             inp = list(zip(sen_f.readlines(), tag_f.readlines()))
+            if rng is not None:
+                assert(len(rng) == 2)
+                inp[:] = inp[rng[0]:rng[1]]
         with Pool(n_proc) as p:
             out = p.map(self.get_sens_tags, inp)
         d['data'], d['action'], d['start'], d['end'], d['sp_width'], d['rule'], d['ref'], d['src_idx'] = zip(*out)
         d['size'] = len(d['data'])
         assert len(d['data']) == len(d['action'])
 
-    def load_data(self, data_type):
+    def load_data(self, data_type, rng=None, domain_suf=''):
         """Loads the data for each type in types from data_dir.
 
         Args:
@@ -153,9 +156,9 @@ class DataLoader(object):
         data = {}
         allowed = ['train', 'dev', 'test']
         if data_type in allowed:
-            sentences_file = os.path.join(self.data_dir, data_type, 'sentences.txt')
-            tags_path = os.path.join(self.data_dir, data_type, 'tags.txt')
-            self.load_sentences_tags(sentences_file, tags_path, data)
+            sentences_file = os.path.join(self.data_dir, data_type, f'sentences{domain_suf}.txt')
+            tags_path = os.path.join(self.data_dir, data_type, f'tags{domain_suf}.txt')
+            self.load_sentences_tags(sentences_file, tags_path, data, rng=rng)
         else:
             raise ValueError(f"data type not in {allowed}")
         return data

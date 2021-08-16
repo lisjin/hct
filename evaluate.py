@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import math
 import numpy as np
@@ -111,6 +112,14 @@ def evaluate(model, data_iterator, params, epoch, mark='val', verbose=False, bes
     return metrics
 
 
+def test_single(params, data_loader, domain_suf, model, epoch, rng=None):
+    test_data = data_loader.load_data('test', rng=rng, domain_suf=domain_suf)
+    params.test_size = test_data['size']
+    params.eval_steps = math.ceil(params.test_size / params.batch_size)
+    test_data_iterator = data_loader.data_iterator(test_data, shuffle=False)
+    test_metrics = evaluate(model, test_data_iterator, params, epoch, mark='test')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', help="Directory containing the dataset")
@@ -119,6 +128,7 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', default='0', help="gpu device")
     parser.add_argument('--seed', type=int, default=23, help="random seed for initialization")
     parser.add_argument('--restore_dir', required=True)
+    parser.add_argument('--domain_rng_path', help='Path to JSON file of domain index ranges per data split')
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
@@ -135,17 +145,21 @@ if __name__ == '__main__':
     bert_class = params.bert_class
     params.rules, params.rule_slot_cnts = load_rules(args.rule_path)
     data_loader = DataLoader(args.dataset, bert_class, params)
-    test_data = data_loader.load_data('test')
-    params.test_size = test_data['size']
-    params.eval_steps = math.ceil(params.test_size / params.batch_size)
-    params.tagger_model_dir = args.model
 
+    params.tagger_model_dir = args.model
     config = get_config(params, bert_class, False)
     model = BertForSequenceTagging(config)
     model.to(params.device)
     model, _, _, _ = load_checkpoint(model, args.restore_dir, params.device)
+    epoch = int(os.path.basename(os.path.normpath(args.restore_dir)))
 
     logging.info("Starting evaluation...")
-    test_data_iterator = data_loader.data_iterator(test_data, shuffle=False)
-    epoch = int(os.path.basename(os.path.normpath(args.restore_dir)))
-    test_metrics = evaluate(model, test_data_iterator, params, epoch, mark='test')
+    domain_suf = '_calling' if args.domain_rng_path else ''
+    test_single(params, data_loader, domain_suf, model, epoch)
+
+    if args.domain_rng_path:
+        with open(args.domain_rng_path, encoding='utf8') as f:
+            domain_rng = json.load(f)
+        for domain, rng in domain_rng['test'].items():
+            print(domain)
+            test_single(params, data_loader, domain_suf, model, epoch, rng=rng)

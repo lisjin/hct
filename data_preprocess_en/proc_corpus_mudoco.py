@@ -9,7 +9,7 @@ from pathos.multiprocessing import ProcessingPool as Pool
 from functools import partial
 
 
-def load_data(args):
+def load_data(args, eval_domains=set(['calling', 'messaging', 'music'])):
     def extract_dial(data, data_dct):
         # Adapted from https://github.com/apple/ml-cread/blob/main/modeling/utils/process_data.py
         for dial in data['dialogs'].values():
@@ -27,11 +27,25 @@ def load_data(args):
                             })
                 hist.append(turn['utterance'])
     data_dct = {k: [] for k in args.splits}
+    domain_rng = {k: {} for k in args.splits}
     for domain in args.domains:
+        for split in args.splits:
+            domain_rng[split]['sz'] = len(data_dct[split])
         with open(os.path.join(args.inp_dir, f'mudoco_{domain}.json'), 'r', encoding='utf8') as f:
             extract_dial(json.load(f), data_dct)
+        if domain == 'calling':
+            domain_rng['train'][domain] = (domain_rng['train']['sz'], len(data_dct['train']))
+        if domain in eval_domains:
+            for split in ('dev', 'test'):
+                domain_rng[split][domain] = (domain_rng[split]['sz'], len(data_dct[split]))
     for split in args.splits:
         s_len = len(data_dct[split])
+        del domain_rng[split]['sz']
+
+    domain_rng_path = os.path.join(args.inp_dir, 'domain_rng.json')
+    if not os.path.isfile(domain_rng_path):
+        with open(domain_rng_path, 'w', encoding='utf8') as f:
+            json.dump(domain_rng, f)
     return data_dct
 
 

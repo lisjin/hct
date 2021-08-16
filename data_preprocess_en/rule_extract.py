@@ -15,7 +15,7 @@ from scipy.cluster.hierarchy import linkage, fcluster
 from sklearn.cluster import AffinityPropagation
 
 from fmatch_lem import fmatch_single
-from utils import fromstring, read_lem, read_expand, concat_path, read_lst, write_lst, punct_set
+from utils import fromstring, read_lem, read_expand, concat_path, read_lst, write_lst, punct_set, load_data_rng
 from utils_data import filter_sources_and_targets
 
 
@@ -338,9 +338,9 @@ def get_cluster_lb_ub(dist, cluster_indices, labels):
     return cluster_lb_ub
 
 
-def label_eval(args, srs, mask_reps):
+def label_eval(args, srs, mask_reps, rule_range_path):
     train_rstrs = read_lst(os.path.join(args.data_dir, 'train', f'rule_{args.cluster_method}.txt'))
-    with open(os.path.join(args.data_dir, 'train', f'rule_range_{args.cluster_method}.txt'), 'r') as f:
+    with open(rule_range_path) as f:
         cluster_lb_ub = [tuple(map(float, l.strip().split())) for l in f.readlines()]
     rstrs = [str(sr) for sr in srs]
     tups = ((rstr, train_rstr) for rstr in rstrs for train_rstr in train_rstrs)
@@ -380,8 +380,12 @@ def main(args):
     srs = [sri(phr, phr_orig, *get_spans(r)) for phr, phr_orig, r in zip(phrs, phrs_orig, sps_out)]
 
     mask_reps = [' '.join([args.mask] * k) for k in range(1, args.max_sp_width + 1)]
+    domain_suf = '_calling' if args.domain_rng_path else ''
+    rule_range_path = os.path.join(args.data_dir, 'train', f'rule_range_{args.cluster_method}{domain_suf}.txt')
     if args.split == 'train':
-        rules, rstr_i, rstrs, rstr2i, srs_str, nr = count_rules(srs)
+        rng = load_data_rng(args.domain_rng_path, 'train', 'calling') if\
+                args.domain_rng_path is not None else (0, len(srs))
+        rules, rstr_i, rstrs, rstr2i, srs_str, nr = count_rules(srs[rng[0]:rng[1]])
         triu_dist = get_triu_dist(rstrs, nr)
         if args.cluster_method == 'thresh':
             dist_thresh = np.percentile(triu_dist, args.perc_q)
@@ -399,14 +403,13 @@ def main(args):
 
         rstr_i, rstrs, cluster_indices = filter_clusters(args, srs, labels, rules, rstrs,
                 rstr_i, rstr2i, mask_reps)
-        write_lst(concat_path(args, f'rule_{args.cluster_method}.txt'), rstrs)
+        write_lst(concat_path(args, f'rule_{args.cluster_method}{domain_suf}.txt'), rstrs)
 
-        if args.cluster_method == 'affinity' and args.split == 'train':
+        if args.cluster_method == 'affinity':
             cluster_lb_ub = get_cluster_lb_ub(dist, cluster_indices, labels)
-            write_lst(concat_path(args, f'rule_range_{args.cluster_method}.txt'),
-                    cluster_lb_ub)
+            write_lst(rule_range_path, cluster_lb_ub)
     else:
-        rstr_i = label_eval(args, srs, mask_reps)
+        rstr_i = label_eval(args, srs, mask_reps, rule_range_path)
 
     rule_sps = [(str(ri), *cs) if ri > -1 else None for ri, cs in zip(rstr_i,
         [sr.ctx_spans for sr in srs])]
@@ -425,5 +428,6 @@ if __name__ == '__main__':
     ap.add_argument('--min_rule_prop', type=float, default=.003)
     ap.add_argument('--perc_q', type=int, default=10, help='For --cluster_method=thresh|hierarch: pairwise distance percentile for upper-bound on inter-cluster distance')
     ap.add_argument('--cluster_method', default='affinity', choices=['affinity', 'thresh', 'hierarch'])
+    ap.add_argument('--domain_rng_path', help='Path to JSON file of domain index ranges per data split')
     args = ap.parse_args()
     main(args)

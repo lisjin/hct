@@ -154,3 +154,8 @@ def compute_bleu(refs=None, hyps=None, args=None, hyp_path=None):
             cov += 1
     print(f'EM: {cov / len(refs)}')
     bleu_tup = Metrics.bleu_score(refs, hyps)
+
+
+def load_data_rng(domain_rng_path, split, domain):
+    with open(domain_rng_path, encoding='utf8') as f:
+        return json.load(f)[split][domain]

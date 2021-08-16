@@ -5,12 +5,13 @@ if [ "$#" -ne 1 ]; then
 fi
 TASK="$1"
 [ "$TASK" = "rewrite" ] && LANG="zh" || LANG="en"
-DATA_DIR="data_preprocess_${LANG}/${TASK}_out"
-MODEL_DIR="experiments/${TASK}21_08-12"
-RULE_PATH="data_preprocess_en/${TASK}/train/rule_affinity.txt"
+DATA_DIR="data_preprocess_${LANG}/${TASK}"
+MODEL_DIR="experiments/${TASK}21_08-15"
+DOMAIN_SUF="_calling"  # for MuDoCo domain adaptation
 python evaluate.py \
-        --dataset $DATA_DIR \
-        --model $MODEL_DIR \
-        --rule_path $RULE_PATH \
-        --gpu 3 \
-        --restore_dir "$MODEL_DIR/17"
+    --dataset "${DATA_DIR}_out" \
+    --model  $MODEL_DIR\
+    --rule_path "${DATA_DIR}/train/rule_affinity${DOMAIN_SUF}.txt" \
+    --gpu 3 \
+    --restore_dir "${MODEL_DIR}/21" \
+    --domain_rng_path "${DATA_DIR}/domain_rng.json"
