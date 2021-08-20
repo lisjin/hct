@@ -50,38 +50,26 @@ class Metrics(object):
         :param candidates: list string
         :return:
         """
-        rouge = Rouge()
+        rg = Rouge()
 
         # 遍历计算rouge
-        rouge1s = []
-        rouge2s = []
-        rougels = []
-        for ref, cand in zip(references, candidates):
-            #ref = ' '.join(list(ref))
-            #cand = ' '.join(list(cand))
-            ref = ' '.join(ref.split())
-            cand = ' '.join(cand.split())
+        r1s, r2s, rls = [], [], []
+        for c, r in zip(candidates, references):
             try:
-                rouge_score = rouge.get_scores([cand], [ref])
-            except:
-                print(sys.exc_info()[0])
-            rouge_1 = rouge_score[0]["rouge-1"]['f']
-            rouge_2 = rouge_score[0]["rouge-2"]['f']
-            rouge_l = rouge_score[0]["rouge-l"]['f']
-
-            rouge1s.append(rouge_1)
-            rouge2s.append(rouge_2)
-            rougels.append(rouge_l)
+                rouge_scores = rg.get_scores(*tuple(map(lambda x:\
+                        [' '.join(x.split())], (c, r))))
+            except Exception as e:
+                print(e)
+            r1s.append(rouge_scores[0]['rouge-1']['f'])
+            r2s.append(rouge_scores[0]['rouge-2']['f'])
+            rls.append(rouge_scores[0]['rouge-l']['f'])
 
         # 计算平均值
-        rouge1_average = sum(rouge1s) / len(rouge1s)
-        rouge2_average = sum(rouge2s) / len(rouge2s)
-        rougel_average = sum(rougels) / len(rougels)
+        r1_avg, r2_avg, rl_avg = map(lambda x: sum(x) / len(x), (r1s, r2s, rls))
 
         # 输出
-        print("rouge_1: %.3f\trouge_2: %.3f\trouge_l: %.3f" \
-                % (rouge1_average, rouge2_average, rougel_average))
-        return (rouge1_average, rouge2_average, rougel_average)
+        print(f"rouge_1: {r1_avg:.3f}\trouge_2: {r2_avg:.3f}\trouge_l: {rl_avg:.3f}")
+        return (r1_avg, r2_avg, rl_avg)
 
 
 if __name__ == '__main__':

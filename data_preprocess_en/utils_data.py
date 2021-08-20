@@ -98,6 +98,10 @@ def filter_sources_and_targets(input_file, keys):
       yield i, sources[0], target
 
 
+def sanitize_str(x):
+  return re.sub('\s\s+', ' ', x)
+
+
 def _yield_wikisplit_examples(
     input_file):
   # The Wikisplit format expects a TSV file with the source on the first and the
@@ -106,7 +110,7 @@ def _yield_wikisplit_examples(
     for line in f:
       line = line.replace('"', '')
       source, target = line.rstrip('\n').split('\t')
-      yield [source], target
+      yield [sanitize_str(source)], sanitize_str(target)
 
 
 def _yield_discofuse_examples(

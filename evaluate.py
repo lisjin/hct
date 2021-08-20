@@ -92,8 +92,8 @@ def evaluate(model, gpt_model, data_iterator, params, epoch, mark='Eval', verbos
         batch_start_output, batch_start = eval_to_cpu(output[2], batch_start)
         batch_end_output, batch_end = eval_to_cpu(output[3], batch_end)
 
-        pred_action_tags.extend([[idx2tag.get(idx) for idx in indices] for indices in np.argmax(batch_action_output, axis=2)])
-        true_action_tags.extend([[idx2tag.get(idx) if idx != -1 else '-1' for idx in indices] for indices in batch_action])
+        pred_action_tags.extend([[idx2tag[idx] for idx in indices] for indices in np.argmax(batch_action_output, axis=2)])
+        true_action_tags.extend([[idx2tag[idx] if idx != -1 else '-1' for idx in indices] for indices in batch_action])
 
         pred_start_tags.extend([indices for indices in batch_start_output])
         true_start_tags.extend([indices for indices in batch_start])
@@ -182,8 +182,6 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     params.seed = args.seed
 
-    params.batch_size = 1
-
     # Set the logger
     set_logger(os.path.join(args.model, 'evaluate.log'))
 
@@ -193,15 +191,7 @@ if __name__ == '__main__':
     # Initialize the DataLoader
     data_dir = 'data_preprocess_en/' + args.dataset
 
-    if args.dataset in ["canard_out"]:
-        bert_class = params.bert_class # auto
-        # bert_class = 'pretrained_bert_models/bert-base-cased/' # manual
-    elif args.dataset in ["emnlp19"]:
-        bert_class = 'bert-base-chinese' # auto
-        # bert_class = 'pretrained_bert_models/bert-base-chinese/' # manual
-    elif args.dataset in ["acl19"]:
-        bert_class = 'bert-base-chinese' # auto
-
+    bert_class = params.bert_class # auto
     data_loader = DataLoader(data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1)
 
     # Load the model
