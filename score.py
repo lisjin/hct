@@ -49,17 +49,22 @@ class Metrics(object):
         :param candidates: list string
         :return:
         """
-        rouge = Rouge(metrics=['rouge-n', 'rouge-l'],
-                max_n=3,
-                apply_avg=True)
+        rg = Rouge()
 
         # 遍历计算rouge
-        refs = [' '.join(x.split()) for x in references]
-        cands = [' '.join(x.split()) for x in candidates]
-        scores = rouge.get_scores(cands, refs)
+        r1s, r2s, rls = [], [], []
+        for c, r in zip(candidates, references):
+            try:
+                rouge_scores = rg.get_scores(*tuple(map(lambda x:\
+                        [' '.join(x.split())], (c, r))))
+            except Exception as e:
+                print(e)
+            r1s.append(rouge_scores[0]['rouge-1']['f'])
+            r2s.append(rouge_scores[0]['rouge-2']['f'])
+            rls.append(rouge_scores[0]['rouge-l']['f'])
 
         # 计算平均值
-        r1_avg, r2_avg, rl_avg = scores['rouge-1']['f'], scores['rouge-2']['f'], scores['rouge-l']['f']
+        r1_avg, r2_avg, rl_avg = map(lambda x: sum(x) / len(x), (r1s, r2s, rls))
 
         # 输出
         print(f"rouge_1: {r1_avg:.3f}\trouge_2: {r2_avg:.3f}\trouge_l: {rl_avg:.3f}")
