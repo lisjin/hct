@@ -141,21 +141,11 @@ if __name__ == '__main__':
     # Create the input data pipeline
 
     # Initialize the DataLoader
-    data_dir = 'data_preprocess_en/' + args.dataset
-
-    if args.dataset in ["base_canard_out"]:
-        bert_class = 'bert-base-uncased' # auto
-        # bert_class = 'pretrained_bert_models/bert-base-cased/' # manual
-    elif args.dataset in ["task"]:
-        bert_class = 'bert-base-cased'
-    elif args.dataset in ["emnlp19"]:
-        #bert_class = 'bert-base-chinese' # auto
-        bert_class = 'pretrained_bert_models/bert-base-tagging-additive_emnlp/'
-        #bert_class = 'pretrained_bert_models/bert-base-chinese/' # manual
-    elif args.dataset in ["acl19"]:
-        #bert_class = 'bert-base-chinese'
-        bert_class = 'pretrained_bert_models/bert-base-tagging-additive/'
-
+    bert_suf, lang = 'uncased', 'en'
+    if args.dataset.startswith('rewrite'):
+        bert_suf, lang = 'chinese', 'zh'
+    data_dir = os.path.join(f'data_preprocess_{lang}', args.dataset)
+    bert_class = f'bert-base-{bert_suf}'
     data_loader = DataLoader(data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1)
 
     logging.info("Loading the datasets...")

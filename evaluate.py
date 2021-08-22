@@ -240,8 +240,6 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     params.seed = args.seed
 
-    params.batch_size = 1
-
     # Set the logger
     utils.set_logger(os.path.join(tagger_model_dir, 'evaluate.log'))
 
@@ -249,17 +247,11 @@ if __name__ == '__main__':
     logging.info("Loading the dataset...")
 
     # Initialize the DataLoader
-    data_dir = 'data_preprocess_en/' + args.dataset
-
-    if args.dataset in ["base_canard_out"]:
-        bert_class = 'bert-base-uncased' # auto
-        # bert_class = 'pretrained_bert_models/bert-base-cased/' # manual
-    elif args.dataset in ["emnlp19"]:
-        bert_class = 'bert-base-chinese' # auto
-        # bert_class = 'pretrained_bert_models/bert-base-chinese/' # manual
-    elif args.dataset in ["acl19"]:
-        bert_class = 'bert-base-chinese' # auto
-
+    bert_suf, lang = 'uncased', 'en'
+    if args.dataset.startswith('rewrite'):
+        bert_suf, lang = 'chinese', 'zh'
+    data_dir = os.path.join(f'data_preprocess_{lang}', args.dataset)
+    bert_class = f'bert-base-{bert_suf}'
     data_loader = DataLoader(data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1)
 
     # Load the model
@@ -269,9 +261,6 @@ if __name__ == '__main__':
         model = BertForSequenceTagging.from_pretrained(tagger_model_dir)
     model.to(params.device)
 
-    #gpt_model = GPT2LMHeadModel.from_pretrained("./dialogue_model/")
-    #gpt_model.to(params.device)
-    #gpt_model.eval()
     gpt_model = 'bleu'
 
     # Load data
@@ -285,4 +274,4 @@ if __name__ == '__main__':
     params.tagger_model_dir = tagger_model_dir
 
     logging.info("Starting evaluation...")
-    test_metrics = evaluate(model, gpt_model, test_data_iterator, params, 'Test', mark='Test', verbose=True)
+    test_metrics = evaluate(model, gpt_model, test_data_iterator, params, 'Test', mark='Test')

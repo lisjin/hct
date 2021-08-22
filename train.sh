@@ -1,5 +1,6 @@
+DATASET='canard'
 python train.py \
-        --dataset base_canard_out \
-        --mode acl19/w_gpt_rl \
-        --gpu 1 \
+        --dataset ${DATASET}_out \
+        --mode ${DATASET}21_08-22_rast \
+        --gpu 0 \
         --gpt_rl \

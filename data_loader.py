@@ -4,7 +4,10 @@ import torch
 import utils
 import random
 import numpy as np
+
+from pathos.multiprocessing import ProcessingPool as Pool
 from transformers import BertTokenizer
+
 
 class DataLoader(object):
     def __init__(self, data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1):
@@ -69,6 +72,30 @@ class DataLoader(object):
 
         return bert_tokens, bert_label_action, bert_label_start, bert_label_end, token_start_indices
 
+    def get_sens_tags(self, line):
+        line1, line2 = line
+        src, tgt = line1.split("\t")
+        tgt = " ".join(tgt.strip().split()).lower()
+        tokens = src.strip().split(' ')
+        seq = line2.strip().split(' ')
+        action_seq, start_seq, end_seq = [], [], []
+        for k in seq:
+            act, se_idx, _ = k.split('|')
+            action_seq.append(self.tag2idx.get(act))
+            s, e = se_idx.split('#')
+            if ',' in s:
+                s, e = tuple(map(lambda x: x.split(',')[0], (s, e)))
+            start_seq.append(s)
+            end_seq.append(e)
+
+        tokens = ['[CLS]'] + tokens
+        action_seq = [1] + action_seq
+        start_seq = [0] + [int(i)+1 for i in start_seq]
+        end_seq = [0] + [int(i)+1 for i in end_seq]
+        bert_tokens, bert_label_action, bert_label_start, bert_label_end, token_start_idxs = self._split_to_wordpieces_span(tokens, action_seq, start_seq, end_seq)
+        sentence = (self.tokenizer.convert_tokens_to_ids(bert_tokens), token_start_idxs)
+        return sentence, bert_label_action, bert_label_start, bert_label_end, tgt
+
     def load_sentences_tags(self, sentences_file, tags_file, d):
         """Loads sentences and tags from their corresponding files.
             Maps tokens and tags to their indices and stores them in the provided dict d.
@@ -78,41 +105,14 @@ class DataLoader(object):
         action = []
         start = []
         end = []
-        with open(sentences_file, 'r') as file1:
-            with open(tags_file, 'r') as file2:
-                for line1, line2 in list(zip(file1,file2)):
-                    src, tgt = line1.split("\t")
-                    tgt = " ".join(tgt.strip().split())
-                    ref.append(tgt.lower())
-                    tokens = src.strip().split(' ')
-                    seq = line2.strip().split(' ')
-                    action_seq = [k.split("|")[0] for k in seq]
-                    start_seq = [k.split("|")[1].split("#")[0] for k in seq]
-                    end_seq = [k.split("|")[1].split("#")[1] for k in seq]
-                    action_seq = [self.tag2idx.get(tag) for tag in action_seq]
-
-                    tokens = ['[CLS]'] + tokens
-                    action_seq = [1] + action_seq
-                    start_seq = [0] + [int(i)+1 for i in start_seq]
-                    end_seq = [0] + [int(i)+1 for i in end_seq]
-                    bert_tokens, bert_label_action, bert_label_start, bert_label_end, token_start_idxs = self._split_to_wordpieces_span(tokens, action_seq, start_seq, end_seq)
-                    sentences.append((self.tokenizer.convert_tokens_to_ids(bert_tokens), token_start_idxs))
-                    action.append(bert_label_action)
-                    start.append(bert_label_start)
-                    end.append(bert_label_end)
-            # checks to ensure there is a tag for each token
+        with open(sentences_file, 'r') as file1, open(tags_file, 'r') as file2:
+            inp = list(zip(file1.readlines(), file2.readlines()))
+            with Pool(4) as p:
+                out = p.map(self.get_sens_tags, inp)
             assert len(sentences) == len(action)
-            #for i in range(len(sentences)):
-            #    assert len(action[i]) == len(sentences[i][-1])
 
-            d['action'] = action
-            d['start'] = start
-            d['end'] = end
-            d["ref"] = ref
-
-        # storing sentences and tags in dict d
-        d['data'] = sentences
-        d['size'] = len(sentences)
+            d['data'], d['action'], d['start'], d['end'], d['ref'] = zip(*out)
+            d['size'] = len(d['action'])
 
     def load_data(self, data_type):
         """Loads the data for each type in types from data_dir.
