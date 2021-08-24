@@ -9,8 +9,9 @@ from transformers import BertTokenizer
 
 
 class DataLoader(object):
-    def __init__(self, data_dir, bert_class, params, token_pad_idx=0, tag_pad_idx=-1, rule_pad_idx=-1):
+    def __init__(self, data_dir, bert_class, params, f_suf, token_pad_idx=0, tag_pad_idx=-1, rule_pad_idx=-1):
         self.data_dir = data_dir
+        self.f_suf = f_suf
         self.batch_size = params.batch_size
         self.max_len = params.max_len
         self.device = params.device
@@ -156,8 +157,8 @@ class DataLoader(object):
         data = {}
         allowed = ['train', 'dev', 'test']
         if data_type in allowed:
-            sentences_file = os.path.join(self.data_dir, data_type, f'sentences{domain_suf}.txt')
-            tags_path = os.path.join(self.data_dir, data_type, f'tags{domain_suf}.txt')
+            sentences_file = os.path.join(self.data_dir, data_type, f'sentences{domain_suf}{self.f_suf}.txt')
+            tags_path = os.path.join(self.data_dir, data_type, f'tags{domain_suf}{self.f_suf}.txt')
             self.load_sentences_tags(sentences_file, tags_path, data, rng=rng)
         else:
             raise ValueError(f"data type not in {allowed}")

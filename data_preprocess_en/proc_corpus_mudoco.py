@@ -9,7 +9,7 @@ from pathos.multiprocessing import ProcessingPool as Pool
 from functools import partial
 
 
-def load_data(args, eval_domains=set(['calling', 'messaging', 'music'])):
+def load_data(args):
     def extract_dial(data, data_dct):
         # Adapted from https://github.com/apple/ml-cread/blob/main/modeling/utils/process_data.py
         for dial in data['dialogs'].values():
@@ -35,7 +35,7 @@ def load_data(args, eval_domains=set(['calling', 'messaging', 'music'])):
             extract_dial(json.load(f), data_dct)
         if domain == 'calling':
             domain_rng['train'][domain] = (domain_rng['train']['sz'], len(data_dct['train']))
-        if domain in eval_domains:
+        if domain in args.domains:
             for split in ('dev', 'test'):
                 domain_rng[split][domain] = (domain_rng[split]['sz'], len(data_dct[split]))
     for split in args.splits:

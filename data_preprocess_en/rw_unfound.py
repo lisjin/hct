@@ -21,9 +21,9 @@ def get_phrs_add(args):
             cpts_uniq = p.map(fromstring, [l.rstrip() for l in f])
     with open(concat_path(args, 'cpt_ids.txt'), encoding='utf8') as f:
         cids = [list(map(int, l.rstrip().split(','))) for l in f]
-    with open(concat_path(args, args.ctx_sps_f.format(args.cluster_method))) as f:
+    with open(concat_path(args, args.ctx_sps_f.format(args.cluster_method, args.f_suf))) as f:
         ctx_sps = json.load(f)
-    rules = read_lst(os.path.join(args.data_dir, 'train', args.rule_f.format(args.cluster_method)))
+    rules = read_lst(os.path.join(args.data_dir, 'train', args.rule_f.format(args.cluster_method, args.f_suf)))
 
     with open(concat_path(args, 'unfound_phrs.json'), encoding='utf8') as f:
         unfound_phrs = json.load(f)
@@ -90,11 +90,12 @@ def proc_examples(args):
 
     if args.write:
         domain_suf = '_calling' if args.domain_rng_path else ''
+        args.f_suf = domain_suf + args.f_suf
         hyp_path = concat_path(args, args.hyp_f.format(args.mmode, args.tmode, domain_suf))
         write_lst(hyp_path, snts)
-        write_lst(concat_path(args, f'tags{domain_suf}.txt', data_out=True), tags)
-        write_lst(concat_path(args, f'sentences{domain_suf}.txt', data_out=True), sens)
-        with open(concat_path(args, f'cnv_ids{domain_suf}.json'), 'w') as f:
+        write_lst(concat_path(args, f'tags{args.f_suf}.txt', data_out=True), tags)
+        write_lst(concat_path(args, f'sentences{args.f_suf}.txt', data_out=True), sens)
+        with open(concat_path(args, f'cnv_ids{args.f_suf}.json'), 'w') as f:
             json.dump(cnv_ids, f)
         compute_bleu(refs=tgts, hyps=snts)
     else:
@@ -114,8 +115,9 @@ if __name__ == '__main__':
     ap.add_argument('--data_out_dir', default='canard_out')
     ap.add_argument('--mmode', default='difflib')
     ap.add_argument('--tmode', default='bup')
-    ap.add_argument('--ctx_sps_f', default='rule_sps_{}.json')
-    ap.add_argument('--rule_f', default='rule_{}.txt')
+    ap.add_argument('--f_suf', default='')
+    ap.add_argument('--ctx_sps_f', default='rule_sps_{}{}.json')
+    ap.add_argument('--rule_f', default='rule_{}{}.txt')
     ap.add_argument('--hyp_f', default='snts_{}_{}{}.txt')
     ap.add_argument('--vocab_f', default='uncased_L-12_H-768_A-12/vocab.txt')
     ap.add_argument('--n_proc', type=int, default=min(4, os.cpu_count()))

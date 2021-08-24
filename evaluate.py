@@ -92,7 +92,7 @@ def evaluate(model, data_iterator, params, epoch, mark='val', verbose=False, bes
         if bleu4 > best_val_bleu:
             ckpt_files = [os.path.join(params.tagger_model_dir, x) for x in\
                     os.listdir(params.tagger_model_dir) if re.search(r'^\d+$', x)]
-            if len(ckpt_files) > 2:  # keep only most recent top-3
+            if len(ckpt_files) > 1:  # keep only most recent top-2
                 shutil.rmtree(min(ckpt_files, key=os.path.getctime))
             save_checkpoint(model, ckpt_dir, optimizer, scheduler)
             write_pred(ckpt_dir, hypo, epoch, bleu4)
@@ -112,8 +112,8 @@ def evaluate(model, data_iterator, params, epoch, mark='val', verbose=False, bes
     return metrics
 
 
-def test_single(params, data_loader, domain_suf, model, epoch, rng=None):
-    test_data = data_loader.load_data('test', rng=rng, domain_suf=domain_suf)
+def test_single(params, data_loader, domain_suf, model, epoch):
+    test_data = data_loader.load_data('test', domain_suf=domain_suf)
     params.test_size = test_data['size']
     params.eval_steps = math.ceil(params.test_size / params.batch_size)
     test_data_iterator = data_loader.data_iterator(test_data, shuffle=False)
@@ -128,7 +128,8 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', default='0', help="gpu device")
     parser.add_argument('--seed', type=int, default=23, help="random seed for initialization")
     parser.add_argument('--restore_dir', required=True)
-    parser.add_argument('--domain_rng_path', help='Path to JSON file of domain index ranges per data split')
+    parser.add_argument('--f_suf', default='')
+    parser.add_argument('--domain_suf', default='')
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
@@ -144,7 +145,7 @@ if __name__ == '__main__':
     logging.info("Loading the dataset...")
     bert_class = params.bert_class
     params.rules, params.rule_slot_cnts = load_rules(args.rule_path)
-    data_loader = DataLoader(args.dataset, bert_class, params)
+    data_loader = DataLoader(args.dataset, bert_class, params, args.f_suf)
 
     params.tagger_model_dir = args.model
     config = get_config(params, bert_class, False)
@@ -154,12 +155,4 @@ if __name__ == '__main__':
     epoch = int(os.path.basename(os.path.normpath(args.restore_dir)))
 
     logging.info("Starting evaluation...")
-    domain_suf = '_calling' if args.domain_rng_path else ''
-    test_single(params, data_loader, domain_suf, model, epoch)
-
-    if args.domain_rng_path:
-        with open(args.domain_rng_path, encoding='utf8') as f:
-            domain_rng = json.load(f)
-        for domain, rng in domain_rng['test'].items():
-            print(domain)
-            test_single(params, data_loader, domain_suf, model, epoch, rng=rng)
+    test_single(params, data_loader, args.domain_suf, model, epoch)

@@ -338,8 +338,8 @@ def get_cluster_lb_ub(dist, cluster_indices, labels):
     return cluster_lb_ub
 
 
-def label_eval(args, srs, mask_reps, rule_range_path):
-    train_rstrs = read_lst(os.path.join(args.data_dir, 'train', f'rule_{args.cluster_method}.txt'))
+def label_eval(args, srs, mask_reps, rule_range_path, f_suf):
+    train_rstrs = read_lst(os.path.join(args.data_dir, 'train', f'rule_{args.cluster_method}{f_suf}.txt'))
     with open(rule_range_path) as f:
         cluster_lb_ub = [tuple(map(float, l.strip().split())) for l in f.readlines()]
     rstrs = [str(sr) for sr in srs]
@@ -380,8 +380,9 @@ def main(args):
     srs = [sri(phr, phr_orig, *get_spans(r)) for phr, phr_orig, r in zip(phrs, phrs_orig, sps_out)]
 
     mask_reps = [' '.join([args.mask] * k) for k in range(1, args.max_sp_width + 1)]
-    domain_suf = '_calling' if args.domain_rng_path else ''
-    rule_range_path = os.path.join(args.data_dir, 'train', f'rule_range_{args.cluster_method}{domain_suf}.txt')
+    f_suf = ('_calling' if args.domain_rng_path else '') +\
+            f'_{args.min_rule_prop}_{args.max_sp_width}'
+    rule_range_path = os.path.join(args.data_dir, 'train', f'rule_range_{args.cluster_method}{f_suf}.txt')
     if args.split == 'train':
         rng = load_data_rng(args.domain_rng_path, 'train', 'calling') if\
                 args.domain_rng_path is not None else (0, len(srs))
@@ -403,17 +404,17 @@ def main(args):
 
         rstr_i, rstrs, cluster_indices = filter_clusters(args, srs, labels, rules, rstrs,
                 rstr_i, rstr2i, mask_reps)
-        write_lst(concat_path(args, f'rule_{args.cluster_method}{domain_suf}.txt'), rstrs)
+        write_lst(concat_path(args, f'rule_{args.cluster_method}{f_suf}.txt'), rstrs)
 
         if args.cluster_method == 'affinity':
             cluster_lb_ub = get_cluster_lb_ub(dist, cluster_indices, labels)
             write_lst(rule_range_path, cluster_lb_ub)
     else:
-        rstr_i = label_eval(args, srs, mask_reps, rule_range_path)
+        rstr_i = label_eval(args, srs, mask_reps, rule_range_path, f_suf)
 
     rule_sps = [(str(ri), *cs) if ri > -1 else None for ri, cs in zip(rstr_i,
         [sr.ctx_spans for sr in srs])]
-    with open(concat_path(args, f'rule_sps_{args.cluster_method}.json'), 'w', encoding='utf8') as f:
+    with open(concat_path(args, f'rule_sps_{args.cluster_method}{f_suf}.json'), 'w', encoding='utf8') as f:
         json.dump(rule_sps, f)
 
 
@@ -425,7 +426,7 @@ if __name__ == '__main__':
     ap.add_argument('--max_sp_width', type=int, default=3)
     ap.add_argument('--mask', default='_')
     ap.add_argument('--ignore_trail_punct', type=int, default=1)
-    ap.add_argument('--min_rule_prop', type=float, default=.003)
+    ap.add_argument('--min_rule_prop', type=float, default=.005)
     ap.add_argument('--perc_q', type=int, default=10, help='For --cluster_method=thresh|hierarch: pairwise distance percentile for upper-bound on inter-cluster distance')
     ap.add_argument('--cluster_method', default='affinity', choices=['affinity', 'thresh', 'hierarch'])
     ap.add_argument('--domain_rng_path', help='Path to JSON file of domain index ranges per data split')
