@@ -110,6 +110,8 @@ def main(args):
 
     bert_class = params.bert_class
     params.rules, params.rule_slot_cnts = load_rules(args.rule_path)
+    if args.f_suf is None:
+        args.f_suf = ''
     data_loader = DataLoader(args.dataset, bert_class, params, args.f_suf)
     rng = dutils.load_data_rng(args.domain_rng_path, 'train', 'calling')\
             if args.domain_rng_path else None
@@ -151,7 +153,7 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=2020, help="Random seed for initialization")
     parser.add_argument('--restore_dir', default=None,
                         help="Optional, Directory containing weights to reload before training, e.g., 'experiments/conll/'")
-    parser.add_argument('--domain_rng_path', help='Path to JSON file of domain index ranges per data split')
-    parser.add_argument('--f_suf', default='')
+    parser.add_argument('--domain_rng_path', nargs='?', default=None, help='Path to JSON file of domain index ranges per data split')
+    parser.add_argument('--f_suf', default='', nargs='?')
     args = parser.parse_args()
     main(args)

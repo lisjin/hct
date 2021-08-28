@@ -128,7 +128,7 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', default='0', help="gpu device")
     parser.add_argument('--seed', type=int, default=23, help="random seed for initialization")
     parser.add_argument('--restore_dir', required=True)
-    parser.add_argument('--f_suf', default='')
+    parser.add_argument('--f_suf', default='', nargs='?')
     parser.add_argument('--domain_suf', default='')
     args = parser.parse_args()
 
@@ -145,6 +145,8 @@ if __name__ == '__main__':
     logging.info("Loading the dataset...")
     bert_class = params.bert_class
     params.rules, params.rule_slot_cnts = load_rules(args.rule_path)
+    if args.f_suf is None:
+        args.f_suf = ''
     data_loader = DataLoader(args.dataset, bert_class, params, args.f_suf)
 
     params.tagger_model_dir = args.model
