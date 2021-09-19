@@ -65,10 +65,12 @@ class SlottedRule:
 
     @property
     def slot_tokens(self):
+        """Original target tokens covered by slots."""
         return self.span_tokens(self.slot_spans)
 
     @property
     def term_tokens(self):
+        """Original terminal tokens (not covered by slots)."""
         return self.span_tokens(self.term_spans)
 
     @property
@@ -81,6 +83,7 @@ class SlottedRule:
             self.orig_tokens[:] = self.orig_tokens[:-1]
 
     def bound_spans(self, max_sp_width):
+        """Truncate the number of slots if it exceeds `max_sp_width`."""
         self.n_slots = max_sp_width
         self.slot_spans[:] = self.slot_spans[:self.n_slots]
         self.ctx_spans[:] = self.ctx_spans[:self.n_slots]
@@ -95,9 +98,11 @@ class SlottedRule:
         self.tokens[:] = self.tokens[:nt]
 
     def span_tokens(self, spans):
+        """Fetch strings mapping to terminal token spans."""
         return [self.tokens[s:e] for s, e in spans]
 
     def adv_span(self, spans, i):
+        """Helper function for `get_term`."""
         while i < len(spans) - 1 and spans[i][1] == spans[i + 1][0]:
             i += 1
         if i < len(spans):
@@ -108,6 +113,9 @@ class SlottedRule:
         return i + 1, lptr, rptr
 
     def get_term(self, slot_spans):
+        """Given the spans corresponding to slots, find spans of terminal
+        tokens.
+        """
         sps = []
         i, lptr, rptr, n_terms = 0, 0, 0, 0
         if self.slot_spans and self.slot_spans[i][0] == 0:
@@ -240,6 +248,7 @@ def triu_to_full(triu_dist, nr):
 
 
 def group_triu_dist(triu_dist, nr):
+    """Extract only upper triangular part of distance matrix."""
     ret = []
     lptr = 0
     for rlen in range(nr - 1, -1, -1):
@@ -249,6 +258,7 @@ def group_triu_dist(triu_dist, nr):
 
 
 def thresh_cluster(triu_dist, dist_thresh, nr):
+    """Only keep clusters where pairwise distance is at most `dist_thresh`."""
     triu_dist[:] = group_triu_dist(triu_dist, nr)
     par = -np.ones(nr, dtype=np.int32)
     for i in range(1, nr):  # over columns of distance matrix
@@ -263,6 +273,9 @@ def get_str_slots(inp_str, mask):
 
 
 def filter_clusters(args, srs, labels, rules, rstrs, rstr_i, rstr2i, mask_reps):
+    """Run rule clustering and apply threshold on rule coverage per rule based
+    on `args.thresh_cnt`.
+    """
 
     def get_mask_id(mask_rep):
         nonlocal rstr2i
@@ -279,6 +292,7 @@ def filter_clusters(args, srs, labels, rules, rstrs, rstr_i, rstr2i, mask_reps):
             n_slots_dct[v] = get_str_slots(rstrs[v], args.mask)
         k_slots = get_str_slots(rstrs[k], args.mask) if k not in n_slots_dct\
                 else n_slots_dct[k]
+        # Make sure the exemplar and candidate rules share same number of slots
         if k_slots != n_slots_dct[v]:
             if k_slots > 0:
                 v = get_mask_id(mask_reps[k_slots - 1])
@@ -300,7 +314,7 @@ def filter_clusters(args, srs, labels, rules, rstrs, rstr_i, rstr2i, mask_reps):
             cov += cur_cov
             rstrs_uniq[p] = len(rstrs_uniq)
             val = rstrs_uniq[p]
-        elif n_slots_dct[p] > 0:
+        elif n_slots_dct[p] > 0:  # Replace with glue rule if coverage too low
             p = get_mask_id(mask_reps[n_slots_dct[p] - 1])
             val = rstrs_uniq.setdefault(p, len(rstrs_uniq))
         for c in clst:
@@ -308,7 +322,7 @@ def filter_clusters(args, srs, labels, rules, rstrs, rstr_i, rstr2i, mask_reps):
     cov /= nd
     del rstr_i_old
 
-    for mask_rep in mask_reps:
+    for mask_rep in mask_reps:  # Initialize glue rules if they do not exist
         rule_id = get_mask_id(mask_rep)
         if rule_id not in rstrs_uniq:
             rstrs_uniq[rule_id] = len(rstrs_uniq)
@@ -325,6 +339,9 @@ def get_spans(r):
 
 
 def get_cluster_lb_ub(dist, cluster_indices, labels):
+    """Extract mean and standard deviation pairwise distances per rule. These
+    will be used to apply training labels to rules during evaluation.
+    """
     cluster_lb_ub = []
     for ci in cluster_indices:
         sample_indices = np.nonzero(labels == ci)[0]
