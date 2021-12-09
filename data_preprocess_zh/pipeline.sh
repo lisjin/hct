@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
+
+BERT_VOC_PATH="chinese_L-12_H-768_A-12"
+if [ ! -d $BERT_VOC_PATH ]; then
+    mkdir $BERT_VOC_PATH
+    curl -O https://storage.googleapis.com/bert_models/2018_11_03/chinese_L-12_H-768_A-12.zip
+    unzip ${BERT_VOC_PATH}.zip
+    rm -f ${BERT_VOC_PATH}/bert_*
+    rm -f ${BERT_VOC_PATH}.zip
+fi
+
 DATA_DIR="rewrite"
-VOCAB_F="chinese_L-12_H-768_A-12/vocab.txt"
+VOCAB_F="${BERT_VOC_PATH}/vocab.txt"
 python proc_corpus.py  # rewrite/<split>.tsv and rewrite/<split>_pos.tsv
 sh phrase_voc_optimization.sh  # rewrite_out/label_map.txt
 

@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 
+BERT_VOC_PATH="uncased_L-12_H-768_A-12"
+if [ ! -d $BERT_VOC_PATH ]; then
+    mkdir $BERT_VOC_PATH
+    curl -o ${BERT_VOC_PATH}/vocab.txt https://huggingface.co/google/bert_uncased_L-12_H-768_A-12/resolve/main/vocab.txt
+fi
+
 # canard/<split>.tsv and canard/<split>_pos.tsv
 # canard/train_valid_test_wo_context.tsv
 python proc_corpus_canard.py --with_context --wo_context
