@@ -28,7 +28,10 @@ mv <checkpoint_dir> experiments  # e.g., canard21_08-08
 
 ## Evaluation
 
-Modify line 16 of `test.sh` to point to the correct model directory. Run `test.sh <dataset> <epoch>` to evaluate using the checkpoint at a certain epoch.
+Modify line 16 of `test.sh` to point to the correct model directory. Then run the following command:
+```bash
+sh test.sh <dataset> <epoch_number>  # e.g., sh test.sh canard 11
+```
 
 ### From checkpoints
 
@@ -40,9 +43,4 @@ The best-performing models per dataset are below.
 | MuDoCo | `experiments/mudoco21_08-30/17` |
 | Rewrite | `experiments/rewrite21_08_08/12` |
 
-To evaluate on an existing checkpoint, modify line 16 of `test.sh` to point to the correct checkpoint directory. Then run the following command:
-```bash
-sh test.sh <dataset> <epoch_number>  # e.g., sh test.sh canard 11
-```
-
-Note that the epoch number can be found in the paths in the table above.
+To evaluate on an existing checkpoint, modify line 16 of `test.sh` to point to the correct checkpoint directory. Note that the best epoch number per checkpoint can be found in the table above.

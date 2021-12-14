@@ -8,8 +8,17 @@ def parseargs():
 						help="reference")
 	parser.add_argument("--hypo", type=str, required=True,
 						help="hypotheis")
-	
+
 	return parser.parse_args()
+
+
+def helper(srl, segment):
+	for i, item in enumerate(srl):
+		for k, (verb_id, spans) in enumerate(item):
+			for j, x in enumerate(spans):
+				spans[j] = (x[0], ' '.join(segment[i][x[1]:x[2]+1]))
+			srl[i][k] = (segment[i][verb_id], spans)
+	return srl
 
 def srl_inference(hypo, ref):
 	ltp = LTP()
@@ -18,9 +27,9 @@ def srl_inference(hypo, ref):
 
 	ref_segment, ref_hidden = ltp.seg([sen.split(" ") for sen in ref], is_preseged=True)
 
-	hypo_srl = ltp.srl(hypo_hidden, keep_empty=False)
+	hypo_srl = helper(ltp.srl(hypo_hidden, keep_empty=False), hypo_segment)
 
-	ref_srl = ltp.srl(ref_hidden, keep_empty=False)
+	ref_srl = helper(ltp.srl(ref_hidden, keep_empty=False), ref_segment)
 
 	return hypo_srl, ref_srl
 
@@ -42,7 +51,7 @@ def f_score(hypo_srl, ref_srl):
 		for key in hypo_dic:
 			if key in ref_dic:
 				common = len(set(hypo_dic[key]) & set(ref_dic[key]))
-				overlap += common 
+				overlap += common
 			predictions += len(hypo_dic[key])
 
 		reference += sum(len(ref_dic[k]) for k in ref_dic)
@@ -58,7 +67,7 @@ def f_score(hypo_srl, ref_srl):
 	return f_score
 
 def main(args):
-	
+
 	ref_sen=[]
 	with open(args.ref,"r")as file:
 		for line in file:
@@ -75,4 +84,4 @@ def main(args):
 
 if __name__ == '__main__':
     parsed_args = parseargs()
-    main(parsed_args) 
+    main(parsed_args)
