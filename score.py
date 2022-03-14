@@ -22,6 +22,11 @@ class Metrics(object):
         :return:
         """
 
+        def tokenize(lst):
+            return [x.strip().split() for x in lst]
+
+        references = tokenize(references)
+        candidates = tokenize(candidates)
         bleu1s = corpus_bleu([[r] for r in references], candidates, weights=(1.0, 0.0, 0.0, 0.0))
         bleu2s = corpus_bleu([[r] for r in references], candidates, weights=(0.5, 0.5, 0.0, 0.0))
         bleu3s = corpus_bleu([[r] for r in references], candidates, weights=(0.33, 0.33, 0.33, 0.0))
