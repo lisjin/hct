@@ -16,21 +16,26 @@ mv RaST_data/rewrite* data_preprocess_zh
 
 ## Training
 
-Return to the root directory and modify line 22 of `train.sh` with the correct model directory in `experiments/` that contains `params.json`. Then run `sh train.sh <dataset>`. The top-2 checkpoints will be saved in this given directory under the current epoch number (e.g., `experiments/canard/17`).
+Return to the root directory and modify line 22 of `train.sh` with the correct model directory in `experiments/` that contains `params.json`. Then run `sh train.sh <dataset>`. The top-2 checkpoints will be saved in this given directory under the current epoch number (e.g., `experiments/canard/05`).
 
 ### Model checkpoints
 
-Download from these links: [CANARD](https://drive.google.com/file/d/1NPbT4Wr2hu0-wVRMJO46dFxnJ2evtuau/view?usp=sharing), [MuDoCo](https://drive.google.com/file/d/1rZFJsCAJ5LiFdTVUIZEL8Wf3UITt7W2i/view?usp=sharing), [Rewrite](https://drive.google.com/file/d/1k0f9uFYE2Ncn6VEnPp74Yeug8VXqE-10/view?usp=sharing).
+Download from these links:
+
+* [CANARD](https://drive.google.com/file/d/1nolKhtHKj4sn8DTynRPc6dIChhRPNvzf/view?usp=sharing)
+* [MuDoCo](https://drive.google.com/file/d/1NRQ2MohWhlnnQB6aYNGjllh50McIex5K/view?usp=sharing)
+* [Rewrite](https://drive.google.com/file/d/1bMEMqkpXWEZTrzLAbHz4ojP9DqQLIRfR/view?usp=sharing)
+
 ```bash
-tar -xzvf <checkpoint_tar>  # e.g., canard21_08-08.tar.gz
-mv <checkpoint_dir> experiments  # e.g., canard21_08-08
+tar -xzvf <checkpoint_tar>  # e.g., canard21_03-16.tar.gz
+mv <checkpoint_dir> experiments  # e.g., canard21_03-16
 ```
 
 ## Evaluation
 
 Modify line 16 of `test.sh` to point to the correct model directory. Then run the following command:
 ```bash
-sh test.sh <dataset> <epoch_number>  # e.g., sh test.sh canard 11
+sh test.sh <dataset> <epoch_number>  # e.g., sh test.sh canard 05
 ```
 
 ### From checkpoints
@@ -39,8 +44,8 @@ The best-performing models per dataset are below.
 
 | Dataset | Path |
 | --- | --- |
-| CANARD | `experiments/canard21_08-08/11` |
-| MuDoCo | `experiments/mudoco21_08-30/17` |
-| Rewrite | `experiments/rewrite21_08_08/12` |
+| CANARD | `experiments/canard21_03-16/05` |
+| MuDoCo | `experiments/mudoco21_03-16/19` |
+| Rewrite | `experiments/rewrite21_03_19/19` |
 
 To evaluate on an existing checkpoint, modify line 16 of `test.sh` to point to the correct checkpoint directory. Note that the best epoch number per checkpoint can be found in the table above.

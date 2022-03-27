@@ -9,7 +9,7 @@ def main(args):
     with open(f'data_preprocess_{args.lang}/{args.dataset}_out/test/sentences{args.f_suf}.txt', 'r') as f:
         tgts0 = [' '.join(l.strip().split('\t')[-1].split()) for l in f]
 
-    ckpt_path = f'experiments/{args.dataset}21_08-15{args.domain_suf}{args.f_suf}/{args.epoch}'
+    ckpt_path = f'experiments/{args.dataset}21_03-16{args.domain_suf}{args.f_suf}/{args.epoch}'
     test_pred = [x for x in os.listdir(ckpt_path) if x.startswith('pred_test')][0]
     print(f'Evaluating from {test_pred}')
     with open(os.path.join(ckpt_path, test_pred)) as f:

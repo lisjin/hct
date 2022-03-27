@@ -25,14 +25,13 @@ class Metrics(object):
         def tokenize(lst):
             return [x.strip().split() for x in lst]
 
-        references = tokenize(references)
+        references = [[r] for r in tokenize(references)]
         candidates = tokenize(candidates)
-        bleu1s = corpus_bleu([[r] for r in references], candidates, weights=(1.0, 0.0, 0.0, 0.0))
-        bleu2s = corpus_bleu([[r] for r in references], candidates, weights=(0.5, 0.5, 0.0, 0.0))
-        bleu3s = corpus_bleu([[r] for r in references], candidates, weights=(0.33, 0.33, 0.33, 0.0))
-        bleu4s = corpus_bleu([[r] for r in references], candidates, weights=(0.25, 0.25, 0.25, 0.25))
-        print("Avg. BLEU(n):\t%.3f (1)\t%.3f (2)\t%.3f (3)\t%.3f (4)" % (bleu1s, bleu2s, bleu3s, bleu4s))
-        return (bleu1s, bleu2s, bleu3s, bleu4s)
+
+        weights = [tuple([1. / i] * i) for i in range(1, 5)]
+        bleus_n = tuple(corpus_bleu(references, candidates, weights))
+        print("Avg. BLEU(n):\t%.3f (1)\t%.3f (2)\t%.3f (3)\t%.3f (4)" % bleus_n)
+        return bleus_n
 
     @staticmethod
     def em_score(references, candidates):
@@ -79,19 +78,17 @@ class Metrics(object):
 if __name__ == '__main__':
     path_ref = "data/canard/test/sentences.txt"
     path_hypo = "experiments/canard/w_bleu_rl_dot/prediction_task_19_.txt"
-    #path_ref = "canard_data/test-tgt.txt"
-    #path_hypo = "canard_data/output.tok.txt"
     references = []
     with open(path_ref, "r")as f:
         for line in f:
             ref = line.strip().split("\t")[1]
-            references.append(ref.lower())
+            references.append(ref)
 
     candidates = []
     with open(path_hypo, "r")as f:
         for i, line in enumerate(f):
             seq = line.strip().split()
-            candidates.append(" ".join(seq).lower())
+            candidates.append(" ".join(seq))
     # 计算metrics
     Metrics.bleu_score(references, candidates)
     Metrics.em_score(references, candidates)

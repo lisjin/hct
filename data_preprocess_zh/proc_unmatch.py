@@ -4,6 +4,8 @@ import benepar
 import json
 import os
 import spacy
+import subprocess
+import sys
 
 from nltk import Tree
 from tqdm import tqdm
@@ -36,9 +38,15 @@ def load_examples(args):
     return outs_k, outs
 
 
-def cparse(outs, outs_k, args):
-    nlp = spacy.load('zh_core_web_md')
-    nlp.add_pipe(benepar.BeneparComponent('benepar_zh2'))
+def cparse(outs, outs_k, args, spacy_model='zh_core_web_md'):
+    if not spacy.util.is_package(spacy_model):
+        subprocess.check_call([sys.executable, '-m', 'spacy', 'download', spacy_model])
+    nlp = spacy.load(spacy_model)
+    try:
+        nlp.add_pipe(benepar.BeneparComponent('benepar_zh2'))
+    except LookupError:
+        import nltk; benepar.download('benepar_zh2')
+        nlp.add_pipe(benepar.BeneparComponent('benepar_zh2'))
 
     def clean_s(s):
         return s.replace('(', '{').replace(')', '}')

@@ -13,13 +13,13 @@ USE_DOM=0
 [ "$TASK" = "mudoco" -a $USE_DOM -eq 1 ] && DOMAIN_SUF="_calling" || DOMAIN_SUF=""
 echo $DOMAIN_SUF
 
-F_SUF="_0.015_1"
-MODEL_DIR="experiments/${TASK}21_08-24${DOMAIN_SUF}${F_SUF}"
+F_SUF=""
+MODEL_DIR="experiments/${TASK}21_03-16${DOMAIN_SUF}${F_SUF}"
 python evaluate.py \
     --dataset "${DATA_DIR}_out" \
     --model $MODEL_DIR\
     --rule_path "${DATA_DIR}/train/rule_affinity${DOMAIN_SUF}${F_SUF}.txt" \
-    --gpu 2 \
+    --gpu 0 \
     --restore_dir "${MODEL_DIR}/${EPOCH}" \
     --f_suf ${F_SUF}
 

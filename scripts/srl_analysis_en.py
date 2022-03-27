@@ -49,7 +49,7 @@ def item_helper(item):
 
 
 def srl_inference(hypo, ref, cuda_device, ref_srl_path):
-    pred = pretrained.load_predictor('structured-prediction-srl-bert', cuda_device)
+    pred = pretrained.load_predictor('structured-prediction-srl-bert', cuda_device=cuda_device)
     n_cpu = min(os.cpu_count(), 16)
 
     def get_spans(batch):
@@ -58,7 +58,7 @@ def srl_inference(hypo, ref, cuda_device, ref_srl_path):
             out_lst.append(item_helper(item))
         return out_lst
 
-    def helper(lst, bsz=750):
+    def helper(lst, bsz=250):
         nonlocal pred, n_cpu
         out_lst = []
         for i in tqdm(range(0, len(lst), bsz)):
